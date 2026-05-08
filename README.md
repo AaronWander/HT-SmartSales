@@ -554,7 +554,7 @@ If this project helps you, please give us a ⭐️ Star!
 <p align="center">
   <strong>SmartSales AI - Smarter Presales 🦦</strong>
   <br>
-  <sub>Built with ❤️ by the SmartSales Team</sub>
+  <sub>Built with ❤️ by <a href="https://github.com/AaronWander">AaronWander</a></sub>
 </p>
 
 <p align="center">
