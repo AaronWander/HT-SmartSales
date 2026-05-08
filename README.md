@@ -1,454 +1,438 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/AaronWander/HT-SmartSales/main/assets/logo.png" alt="海獭 SmartSales AI" width="200">
+  <img src="https://raw.githubusercontent.com/AaronWander/HT-SmartSales/main/assets/logo.png" alt="SmartSales AI" width="200">
 </p>
 
-<h1 align="center">🦦 海獭 SmartSales AI</h1>
+<h1 align="center">🦦 SmartSales AI</h1>
 
 <p align="center">
-  <strong>AI 驱动的智能售前服务系统 | 让售前咨询更高效、更专业</strong>
+  <strong>AI-Powered Presales Automation System | 10x Sales Efficiency</strong>
 </p>
 
 <p align="center">
-  <a href="#核心优势">核心优势</a> •
-  <a href="#功能特性">功能特性</a> •
-  <a href="#快速开始">快速开始</a> •
-  <a href="#使用场景">使用场景</a> •
-  <a href="#文档">文档</a>
+  <a href="#why-smartsales">Why SmartSales</a> •
+  <a href="#features">Features</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#use-cases">Use Cases</a> •
+  <a href="#documentation">Documentation</a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/AI-Powered-blue?style=for-the-badge" alt="AI Powered">
-  <img src="https://img.shields.io/badge/售前-自动化-green?style=for-the-badge" alt="Sales Automation">
-  <img src="https://img.shields.io/badge/效率-提升10倍-orange?style=for-the-badge" alt="10x Efficiency">
-  <img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Sales-Automation-green?style=for-the-badge" alt="Sales Automation">
+  <img src="https://img.shields.io/badge/Efficiency-10x-orange?style=for-the-badge" alt="10x Efficiency">
+  <img src="https://img.shields.io/badge/Python-3.9+-blue?style=for-the-badge" alt="Python">
 </p>
 
 ---
 
-## 🎯 为什么选择海獭 SmartSales AI？
+## 🎯 Why SmartSales AI?
 
-### 传统售前的痛点
-- ❌ **重复劳动** - 每个客户都要从头问一遍需求
-- ❌ **效率低下** - 一个售前顾问一天只能服务 3-5 个客户
-- ❌ **方案质量不稳定** - 依赖个人经验，新人上手慢
-- ❌ **知识分散** - 产品信息、报价、案例散落各处
-- ❌ **响应慢** - 客户咨询后需要等待人工整理方案
+### Traditional Presales Pain Points
+- ❌ **Repetitive Work** - Asking the same questions to every customer
+- ❌ **Low Efficiency** - One sales rep can only handle 3-5 customers per day
+- ❌ **Inconsistent Quality** - Depends on individual experience
+- ❌ **Scattered Knowledge** - Product info, pricing, and cases spread everywhere
+- ❌ **Slow Response** - Customers wait hours for proposals
 
-### 海獭 SmartSales AI 的解决方案
-- ✅ **智能对话收集** - AI 自动引导客户提供关键信息
-- ✅ **10倍效率提升** - 一个顾问可同时服务 30+ 客户
-- ✅ **标准化输出** - 基于模板确保方案质量一致
-- ✅ **知识库集成** - 自动检索产品信息、报价、案例
-- ✅ **秒级响应** - 客户咨询后 1 分钟内生成初步方案
+### SmartSales AI Solution
+- ✅ **Intelligent Dialogue** - AI guides customers to provide key information
+- ✅ **10x Efficiency** - One rep can serve 30+ customers simultaneously
+- ✅ **Standardized Output** - Template-based consistent quality
+- ✅ **Knowledge Base Integration** - Auto-retrieve product info, pricing, cases
+- ✅ **Instant Response** - Generate proposals within 1 minute
 
 ---
 
-## 🚀 核心优势
+## 🚀 Core Advantages
 
-### 1️⃣ 智能需求挖掘
-不是简单的问答机器人，而是**懂业务的售前顾问**
+### 1️⃣ Intelligent Requirement Mining
+Not just a chatbot, but a **business-savvy presales consultant**
 
-```
-传统方式：
-售前："您的预算是多少？"
-客户："不确定"
-售前："那您的需求是什么？"
-客户："也不太清楚..."
-→ 对话陷入僵局
+**Core Technologies**:
+- 🧠 **Context Understanding** - Remembers conversation history
+- 🎯 **Smart Follow-up** - Dynamically generates questions based on missing info
+- 📊 **Slot Management** - Auto-identifies and fills business-critical information
+- 🔍 **Intent Recognition** - Distinguishes inquiry, confirmation, modification
 
-海獭方式：
-AI："我看到您是做电商的，通常电商客户关注的是订单处理效率和库存管理，
-     您这边主要是哪方面遇到了瓶颈呢？"
-客户："对！我们现在订单量大了，人工处理不过来"
-AI："明白了，那您现在日均订单量大概多少？高峰期能到多少？"
-→ 自然引导，快速定位需求
-```
-
-**核心技术**：
-- 🧠 **上下文理解** - 记住对话历史，不重复提问
-- 🎯 **智能追问** - 根据缺失信息动态生成问题
-- 📊 **槽位管理** - 自动识别和填充业务关键信息
-- 🔍 **意图识别** - 区分咨询、确认、修改等不同意图
-
-### 2️⃣ 三阶段标准化流程
-确保每个客户都得到**完整、专业**的服务
+### 2️⃣ Three-Stage Standardized Workflow
+Ensures every customer receives **complete and professional** service
 
 ```
-阶段 1: 信息收集 (info_collection)
-├─ 自动识别客户行业、规模、痛点
-├─ 智能追问缺失的关键信息
-└─ 实时计算信息完整度
+Stage 1: Information Collection (info_collection)
+├─ Auto-identify customer industry, scale, pain points
+├─ Smart follow-up on missing key information
+└─ Real-time calculation of information completeness
 
-阶段 2: 信息整理 (info_summarization)
-├─ 生成结构化需求摘要
-├─ 展示给客户确认
-└─ 支持自然语言修改
+Stage 2: Information Summarization (info_summarization)
+├─ Generate structured requirement summary
+├─ Present to customer for confirmation
+└─ Support natural language modifications
 
-阶段 3: 方案生成 (proposal)
-├─ 基于模板自动生成方案
-├─ 从知识库检索相关信息
-├─ AI 生成个性化建议
-└─ 输出完整的售前方案文档
+Stage 3: Proposal Generation (proposal)
+├─ Auto-generate proposal based on template
+├─ Retrieve relevant info from knowledge base
+├─ AI generates personalized recommendations
+└─ Output complete presales proposal document
 ```
 
-### 3️⃣ 灵活的模板系统
-**一次配置，终身受益**
+### 3️⃣ Flexible Template System
+**Configure once, benefit forever**
 
 ```markdown
-# 方案模板示例
+# Proposal Template Example
 
-## 客户信息
-- 公司名称：{{slot:company_name}}
-- 行业：{{slot:industry}}
-- 规模：{{slot:company_size}}
+## Customer Information
+- Company: {{slot:company_name}}
+- Industry: {{slot:industry}}
+- Scale: {{slot:company_size}}
 
-## 需求分析
-客户的核心痛点是：{{slot:pain_point}}
+## Requirement Analysis
+Customer's core pain point: {{slot:pain_point}}
 
-根据我们的经验，{{slot:industry}}行业的客户通常需要：
-{{ai:根据行业和痛点生成针对性分析}}
+Based on our experience, {{slot:industry}} industry typically needs:
+{{ai:Generate targeted analysis based on industry and pain points}}
 
-## 解决方案
-{{rag:查询产品库，匹配最适合的产品}}
+## Solution
+{{rag:Query product database, match most suitable products}}
 
-## 报价方案
-{{rag:根据客户规模查询报价表}}
+## Pricing
+{{rag:Query pricing table based on customer scale}}
 
-## 成功案例
-{{rag:查询同行业成功案例}}
+## Success Cases
+{{rag:Query success cases in same industry}}
 
-## 实施计划
-预计实施周期：{{ai:根据客户规模和需求复杂度估算}}
+## Implementation Plan
+Estimated timeline: {{ai:Estimate based on customer scale and requirement complexity}}
 ```
 
-**支持的占位符**：
-- `{{slot:xxx}}` - 客户信息槽位
-- `{{sys:xxx}}` - 系统信息（时间、会话ID等）
-- `{{rag:xxx}}` - 知识库检索（产品、报价、案例）
-- `{{ai:xxx}}` - AI 生成内容（分析、建议、估算）
-- `{{ext:xxx}}` - 外部工具调用（CRM、ERP等）
+**Supported Placeholders**:
+- `{{slot:xxx}}` - Customer information slots
+- `{{sys:xxx}}` - System information (time, session ID, etc.)
+- `{{rag:xxx}}` - Knowledge base retrieval (products, pricing, cases)
+- `{{ai:xxx}}` - AI-generated content (analysis, recommendations, estimates)
+- `{{ext:xxx}}` - External tool calls (CRM, ERP, etc.)
 
-### 4️⃣ 知识库深度集成
-**让 AI 成为你的产品专家**
+### 4️⃣ Deep Knowledge Base Integration
+**Make AI your product expert**
 
-基于 **RAGFlow** 检索增强生成技术：
-- 📚 **产品知识库** - 自动检索产品特性、规格、优势
-- 💰 **报价库** - 根据客户规模自动匹配报价方案
-- 📖 **案例库** - 检索同行业成功案例增强说服力
-- 📋 **政策库** - 自动引用公司政策、服务条款
-- 🎓 **FAQ 库** - 快速回答常见问题
+Based on **RAGFlow** Retrieval-Augmented Generation:
+- 📚 **Product Knowledge Base** - Auto-retrieve product features, specs, advantages
+- 💰 **Pricing Database** - Auto-match pricing plans based on customer scale
+- 📖 **Case Library** - Retrieve industry success cases for persuasion
+- 📋 **Policy Library** - Auto-reference company policies, service terms
+- 🎓 **FAQ Library** - Quick answers to common questions
 
-**智能检索特性**：
-- ✅ 语义理解（不是简单的关键词匹配）
-- ✅ 上下文感知（根据对话历史调整检索策略）
-- ✅ 去重缓存（避免重复检索）
-- ✅ 来源标注（方案中标注信息来源）
+**Smart Retrieval Features**:
+- ✅ Semantic understanding (not just keyword matching)
+- ✅ Context-aware (adjusts retrieval strategy based on conversation history)
+- ✅ Deduplication caching (avoids repeated retrieval)
+- ✅ Source attribution (marks information sources in proposals)
 
-### 5️⃣ 多平台无缝接入
-**客户在哪里，服务就在哪里**
+### 5️⃣ Multi-Platform Seamless Integration
+**Service wherever customers are**
 
-- 💬 **即时通讯** - Telegram、Discord、Slack、WhatsApp
-- 🌐 **Web 接口** - 嵌入官网、客服系统
-- 📱 **移动端** - 微信公众号、小程序（规划中）
-- 🖥️ **CLI** - 命令行界面（内部测试）
-- 🔌 **API** - RESTful API（系统集成）
-
----
-
-## 💼 使用场景
-
-### 场景 1：SaaS 软件售前
-**客户**：某 CRM 软件公司  
-**痛点**：每天收到 50+ 咨询，售前团队只有 3 人，响应不过来  
-**效果**：
-- ⏱️ 响应时间从 2 小时降到 **5 分钟**
-- 📈 咨询转化率从 15% 提升到 **28%**
-- 👥 售前团队效率提升 **12 倍**
-
-### 场景 2：定制化服务售前
-**客户**：某企业数字化转型咨询公司  
-**痛点**：每个客户需求差异大，方案编写耗时 2-3 天  
-**效果**：
-- ⚡ 方案生成时间从 3 天降到 **30 分钟**
-- 📊 方案质量更标准化，客户满意度提升 **40%**
-- 💰 售前成本降低 **60%**
-
-### 场景 3：电商平台客服
-**客户**：某跨境电商平台  
-**痛点**：客户咨询产品推荐，人工客服无法快速匹配  
-**效果**：
-- 🎯 产品推荐准确率 **85%**
-- 🛒 咨询转化率提升 **35%**
-- 💬 客服压力降低 **70%**
+- 💬 **Instant Messaging** - Telegram, Discord, Slack, WhatsApp
+- 🌐 **Web Interface** - Embed in website, customer service system
+- 📱 **Mobile** - WeChat Official Account, Mini Program (planned)
+- 🖥️ **CLI** - Command-line interface (internal testing)
+- 🔌 **API** - RESTful API (system integration)
 
 ---
 
-## ✨ 功能特性
+## 💼 Use Cases
 
-### 🎯 智能对话引擎
-- [x] 自然语言理解（NLU）
-- [x] 上下文记忆（多轮对话）
-- [x] 意图识别（咨询/确认/修改）
-- [x] 情感分析（识别客户情绪）
-- [x] 多语言支持（中文/英文）
+### Case 1: SaaS Software Presales
+**Customer**: A CRM software company  
+**Pain Point**: 50+ daily inquiries, only 3 presales staff, can't keep up  
+**Results**:
+- ⏱️ Response time reduced from 2 hours to **5 minutes**
+- 📈 Inquiry conversion rate increased from 15% to **28%**
+- 👥 Presales team efficiency improved **12x**
 
-### 📋 业务流程管理
-- [x] 三阶段状态机
-- [x] 槽位自动填充
-- [x] 信息完整度检查
-- [x] 自然语言确认
-- [x] 流程可视化（规划中）
+### Case 2: Customized Service Presales
+**Customer**: An enterprise digital transformation consulting company  
+**Pain Point**: Each customer has different needs, proposal writing takes 2-3 days  
+**Results**:
+- ⚡ Proposal generation time reduced from 3 days to **30 minutes**
+- 📊 More standardized proposal quality, customer satisfaction up **40%**
+- 💰 Presales cost reduced **60%**
 
-### 🎨 模板与配置
-- [x] 服务目录化管理
-- [x] 五类占位符系统
-- [x] 模板热更新
-- [x] 多服务并行
-- [x] 版本管理（规划中）
-
-### 🔍 知识库集成
-- [x] RAGFlow 深度集成
-- [x] 语义检索
-- [x] 上下文感知
-- [x] 来源标注
-- [x] 实时更新
-
-### 📊 数据分析
-- [x] 对话质量评估
-- [x] 槽位覆盖率统计
-- [x] 转化率分析（规划中）
-- [x] 客户画像（规划中）
-- [x] A/B 测试（规划中）
-
-### 🔐 企业级特性
-- [x] 多租户隔离
-- [x] 权限管理
-- [x] 审计日志
-- [x] 数据加密
-- [x] 私有化部署
+### Case 3: E-commerce Platform Customer Service
+**Customer**: A cross-border e-commerce platform  
+**Pain Point**: Customer inquiries for product recommendations, manual service can't match quickly  
+**Results**:
+- 🎯 Product recommendation accuracy **85%**
+- 🛒 Inquiry conversion rate increased **35%**
+- 💬 Customer service pressure reduced **70%**
 
 ---
 
-## 🚀 快速开始
+## ✨ Features
 
-### 前置要求
+### 🎯 Intelligent Dialogue Engine
+- [x] Natural Language Understanding (NLU)
+- [x] Context Memory (multi-turn dialogue)
+- [x] Intent Recognition (inquiry/confirmation/modification)
+- [x] Sentiment Analysis (identify customer emotions)
+- [x] Multi-language Support (Chinese/English)
+
+### 📋 Business Process Management
+- [x] Three-stage state machine
+- [x] Auto slot filling
+- [x] Information completeness check
+- [x] Natural language confirmation
+- [x] Process visualization (planned)
+
+### 🎨 Template & Configuration
+- [x] Service catalog management
+- [x] Five-type placeholder system
+- [x] Template hot reload
+- [x] Multi-service parallel
+- [x] Version management (planned)
+
+### 🔍 Knowledge Base Integration
+- [x] RAGFlow deep integration
+- [x] Semantic retrieval
+- [x] Context-aware
+- [x] Source attribution
+- [x] Real-time updates
+
+### 📊 Data Analytics
+- [x] Dialogue quality assessment
+- [x] Slot coverage statistics
+- [x] Conversion rate analysis (planned)
+- [x] Customer profiling (planned)
+- [x] A/B testing (planned)
+
+### 🔐 Enterprise Features
+- [x] Multi-tenant isolation
+- [x] Permission management
+- [x] Audit logs
+- [x] Data encryption
+- [x] Private deployment
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
 - Python 3.9+
-- 大语言模型 API（OpenAI / Claude / 国产大模型）
-- RAGFlow（可选，用于知识库检索）
+- LLM API (OpenAI / Claude / Local models)
+- RAGFlow (optional, for knowledge base retrieval)
 
-### 安装
+### Installation
 
 ```bash
-# 1. 克隆项目
+# 1. Clone the repository
 git clone https://github.com/AaronWander/HT-SmartSales.git
 cd HT-SmartSales
 
-# 2. 安装依赖
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. 配置环境变量
+# 3. Configure environment variables
 cp .env.example .env
-# 编辑 .env，配置你的 API keys
+# Edit .env and configure your API keys
 ```
 
-### 配置你的第一个服务
+### Configure Your First Service
 
 ```bash
-# 创建服务目录
-mkdir -p presales_services/我的服务
+# Create service directory
+mkdir -p presales_services/my-service
 
-# 创建方案模板
-cat > presales_services/我的服务/proposal.md << 'EOF'
-# {{slot:company_name}} 专属解决方案
+# Create proposal template
+cat > presales_services/my-service/proposal.md << 'EOF'
+# {{slot:company_name}} Custom Solution
 
-## 客户信息
-- 公司：{{slot:company_name}}
-- 行业：{{slot:industry}}
-- 需求：{{slot:requirement}}
+## Customer Information
+- Company: {{slot:company_name}}
+- Industry: {{slot:industry}}
+- Requirement: {{slot:requirement}}
 
-## 解决方案
-{{rag:根据行业查询产品方案}}
+## Solution
+{{rag:Query product solution based on industry}}
 
-## 报价
-{{rag:根据规模查询报价}}
+## Pricing
+{{rag:Query pricing based on scale}}
 EOF
 
-# 创建槽位配置
-cat > presales_services/我的服务/slots.yaml << 'EOF'
-id: 我的服务
+# Create slot configuration
+cat > presales_services/my-service/slots.yaml << 'EOF'
+id: my-service
 required_base:
   - company_name
   - industry
   - requirement
 meta:
   company_name:
-    label: 公司名称
-    desc: 客户的公司名称
+    label: Company Name
+    desc: Customer's company name
   industry:
-    label: 所属行业
-    desc: 客户所在的行业领域
+    label: Industry
+    desc: Customer's industry sector
   requirement:
-    label: 核心需求
-    desc: 客户的主要需求或痛点
+    label: Core Requirement
+    desc: Customer's main needs or pain points
 EOF
 ```
 
-### 启动服务
+### Start Service
 
 ```bash
-# 方式 1：CLI 模式（测试）
+# Method 1: CLI mode (testing)
 python cli.py
 
-# 方式 2：Telegram Bot
+# Method 2: Telegram Bot
 python gateway/run.py --platform telegram
 
-# 方式 3：Web API
+# Method 3: Web API
 python gateway/run.py --platform api
 ```
 
-### 测试对话
+### Test Conversation
 
 ```
-用户: 你好，我想了解一下你们的产品
-AI: 您好！我是海獭智能售前助手。为了给您提供最合适的方案，
-    能先了解一下您的公司名称吗？
+User: Hello, I'd like to learn about your products
+AI: Hello! I'm SmartSales AI assistant. To provide you with the most 
+    suitable solution, may I know your company name first?
 
-用户: 我们是ABC科技公司
-AI: 好的，ABC科技公司。请问贵公司是做什么行业的呢？
+User: We are ABC Tech Company
+AI: Got it, ABC Tech Company. What industry is your company in?
 
-用户: 我们是做电商的
-AI: 明白了，电商行业。那您这边主要遇到了什么问题或者
-    有什么需求呢？
+User: We're in e-commerce
+AI: Understood, e-commerce industry. What problems are you facing or 
+    what needs do you have?
 
-用户: 我们现在订单量大了，库存管理很混乱
-AI: 收到！让我为您整理一下信息：
-    - 公司：ABC科技公司
-    - 行业：电商
-    - 需求：订单量增长，库存管理混乱
+User: Our order volume has grown, inventory management is chaotic
+AI: Received! Let me summarize the information:
+    - Company: ABC Tech Company
+    - Industry: E-commerce
+    - Requirement: Order volume growth, chaotic inventory management
     
-    这些信息对吗？
+    Is this information correct?
 
-用户: 对的
-AI: 好的，正在为您生成专属方案...
+User: Yes
+AI: Great, generating your custom proposal...
     
-    [生成完整的售前方案文档]
+    [Generates complete presales proposal document]
 ```
 
 ---
 
-## 📁 项目结构
+## 📁 Project Structure
 
 ```
 HT-SmartSales/
-├── agent/                          # 🧠 核心业务逻辑
-│   ├── presales_policy.py         # 槽位策略和配置解析
-│   ├── presales_state_machine.py  # 三阶段状态机
-│   ├── presales_answer_gate.py    # 答案质量门控
-│   ├── presales_summarizer.py     # 信息摘要生成
-│   └── presales_proposal.py       # 方案模板渲染引擎
+├── agent/                          # 🧠 Core business logic
+│   ├── presales_policy.py         # Slot policy and config parsing
+│   ├── presales_state_machine.py  # Three-stage state machine
+│   ├── presales_answer_gate.py    # Answer quality gate
+│   ├── presales_summarizer.py     # Information summary generation
+│   └── presales_proposal.py       # Proposal template rendering engine
 │
-├── presales_services/              # 📋 服务配置目录
-│   └── 客户专属穿搭服务/          # 示例服务
-│       ├── proposal.md            # 方案模板
-│       └── slots.yaml             # 槽位配置
+├── presales_services/              # 📋 Service configuration directory
+│   └── example-service/           # Example service
+│       ├── proposal.md            # Proposal template
+│       └── slots.yaml             # Slot configuration
 │
-├── tools/                          # 🔧 工具集成
-│   ├── ragflow_tool.py            # RAGFlow 知识库工具
-│   └── ...                        # 其他工具
+├── tools/                          # 🔧 Tool integration
+│   ├── ragflow_tool.py            # RAGFlow knowledge base tool
+│   └── ...                        # Other tools
 │
-├── gateway/                        # 🌐 多平台接入
-│   ├── run.py                     # 网关主程序
-│   ├── telegram_gateway.py        # Telegram 集成
-│   ├── discord_gateway.py         # Discord 集成
-│   └── ...                        # 其他平台
+├── gateway/                        # 🌐 Multi-platform access
+│   ├── run.py                     # Gateway main program
+│   ├── telegram_gateway.py        # Telegram integration
+│   ├── discord_gateway.py         # Discord integration
+│   └── ...                        # Other platforms
 │
-├── docs/                           # 📚 文档
+├── docs/                           # 📚 Documentation
 │   └── presales-rag/
-│       ├── design-decision-record.md  # 设计文档
-│       ├── runtime-config.md          # 配置说明
-│       └── TEMPLATE_GUIDE.md          # 模板编写指南
+│       ├── design-decision-record.md  # Design documentation
+│       ├── runtime-config.md          # Configuration guide
+│       └── TEMPLATE_GUIDE.md          # Template writing guide
 │
-├── tests/                          # 🧪 测试
-│   ├── agent/test_presales_*.py   # 业务逻辑测试
-│   └── tools/test_ragflow_tool.py # 工具测试
+├── tests/                          # 🧪 Tests
+│   ├── agent/test_presales_*.py   # Business logic tests
+│   └── tools/test_ragflow_tool.py # Tool tests
 │
-├── LICENSES/                       # 📄 开源声明
-│   ├── HERMES-MIT.txt             # Hermes Agent 协议
-│   ├── RAGFLOW-APACHE2.txt        # RAGFlow 协议
-│   └── README.md                  # 许可证说明
+├── LICENSES/                       # 📄 Open source declarations
+│   ├── HERMES-MIT.txt             # Hermes Agent license
+│   ├── RAGFLOW-APACHE2.txt        # RAGFlow license
+│   └── README.md                  # License description
 │
-└── README.md                       # 📖 本文档
+└── README.md                       # 📖 This document
 ```
 
 ---
 
-## 📚 文档
+## 📚 Documentation
 
-### 快速入门
-- [安装指南](docs/installation.md)
-- [5分钟快速开始](docs/quickstart.md)
-- [配置说明](docs/configuration.md)
+### Quick Start
+- [Installation Guide](docs/installation.md)
+- [5-Minute Quickstart](docs/quickstart.md)
+- [Configuration Guide](docs/configuration.md)
 
-### 核心概念
-- [三阶段工作流](docs/presales-rag/design-decision-record.md)
-- [槽位系统](docs/presales-rag/runtime-config.md)
-- [模板编写指南](docs/presales-rag/TEMPLATE_GUIDE.md)
+### Core Concepts
+- [Three-Stage Workflow](docs/presales-rag/design-decision-record.md)
+- [Slot System](docs/presales-rag/runtime-config.md)
+- [Template Writing Guide](docs/presales-rag/TEMPLATE_GUIDE.md)
 
-### 集成指南
-- [RAGFlow 知识库集成](docs/ragflow-integration.md)
-- [Telegram Bot 部署](docs/telegram-deployment.md)
-- [API 接口文档](docs/api-reference.md)
+### Integration Guides
+- [RAGFlow Knowledge Base Integration](docs/ragflow-integration.md)
+- [Telegram Bot Deployment](docs/telegram-deployment.md)
+- [API Reference](docs/api-reference.md)
 
-### 最佳实践
-- [模板设计最佳实践](docs/template-best-practices.md)
-- [知识库组织建议](docs/knowledge-base-organization.md)
-- [性能优化指南](docs/performance-optimization.md)
+### Best Practices
+- [Template Design Best Practices](docs/template-best-practices.md)
+- [Knowledge Base Organization](docs/knowledge-base-organization.md)
+- [Performance Optimization](docs/performance-optimization.md)
 
 ---
 
-## 🔧 配置说明
+## 🔧 Configuration
 
-### 环境变量
+### Environment Variables
 
 ```bash
-# ===== LLM 配置 =====
-# 选择一个 LLM 提供商
-OPENROUTER_API_KEY=sk-or-xxx        # OpenRouter（推荐，支持多模型）
-# 或
+# ===== LLM Configuration =====
+# Choose one LLM provider
+OPENROUTER_API_KEY=sk-or-xxx        # OpenRouter (recommended, multi-model)
+# or
 OPENAI_API_KEY=sk-xxx               # OpenAI
-# 或
+# or
 ANTHROPIC_API_KEY=sk-ant-xxx        # Claude
 
-# ===== RAGFlow 配置（可选）=====
+# ===== RAGFlow Configuration (optional) =====
 RAGFLOW_API_KEY=ragflow-xxx
 RAGFLOW_BASE_URL=http://localhost:9380
 
-# ===== 消息平台配置（可选）=====
+# ===== Messaging Platform Configuration (optional) =====
 TELEGRAM_BOT_TOKEN=123456:ABC-xxx
 DISCORD_BOT_TOKEN=xxx
 SLACK_BOT_TOKEN=xoxb-xxx
 ```
 
-### 业务配置 (config.yaml)
+### Business Configuration (config.yaml)
 
 ```yaml
 agent:
-  # 启用售前功能
+  # Enable presales features
   presales_enabled: true
   
-  # 状态机配置
+  # State machine configuration
   presales_state_machine_enabled: true
   presales_answer_gate_enabled: true
   
-  # 槽位评估模式
+  # Slot assessment mode
   presales_slot_assessment_mode: "llm_structured"  # llm_structured | heuristic
   
-  # 知识库配置
+  # Knowledge base configuration
   ragflow_hybrid_mode: "on"  # on | off | always
   ragflow_single_retrieval_mode: true
   ragflow_max_calls_per_turn: 1
   
-  # 质量门控
+  # Quality gate
   confidence_thresholds:
     high_slot_coverage: 0.8
     medium_slot_coverage: 0.5
@@ -456,149 +440,149 @@ agent:
 
 ---
 
-## 📊 性能指标
+## 📊 Performance Metrics
 
-### 响应速度
-- 信息收集：< 2 秒
-- 摘要生成：< 3 秒
-- 方案生成：< 30 秒（含知识库检索）
+### Response Speed
+- Information collection: < 2 seconds
+- Summary generation: < 3 seconds
+- Proposal generation: < 30 seconds (including knowledge base retrieval)
 
-### 准确率
-- 槽位识别准确率：> 90%
-- 意图识别准确率：> 85%
-- 知识检索相关性：> 80%
+### Accuracy
+- Slot identification accuracy: > 90%
+- Intent recognition accuracy: > 85%
+- Knowledge retrieval relevance: > 80%
 
-### 并发能力
-- 单实例支持：100+ 并发会话
-- 水平扩展：无限制
+### Concurrency
+- Single instance supports: 100+ concurrent sessions
+- Horizontal scaling: unlimited
 
 ---
 
-## 🧪 测试
+## 🧪 Testing
 
 ```bash
-# 运行所有测试
+# Run all tests
 ./scripts/run_tests.sh
 
-# 运行 presales 业务测试
+# Run presales business tests
 ./scripts/run_tests.sh tests/agent/test_presales_*.py
 
-# 运行状态机测试
+# Run state machine tests
 ./scripts/run_tests.sh tests/agent/test_presales_state_machine.py
 
-# 运行知识库工具测试
+# Run knowledge base tool tests
 ./scripts/run_tests.sh tests/tools/test_ragflow_tool.py
 ```
 
-**测试覆盖率**：
-- 状态机：100%
-- 槽位管理：95%
-- 模板渲染：90%
-- 总体：85%+
+**Test Coverage**:
+- State machine: 100%
+- Slot management: 95%
+- Template rendering: 90%
+- Overall: 85%+
 
 ---
 
-## 🗺️ 路线图
+## 🗺️ Roadmap
 
-### v1.0（当前版本）✅
-- [x] 三阶段工作流
-- [x] 智能槽位管理
-- [x] 模板系统
-- [x] RAGFlow 集成
-- [x] 多平台支持
+### v1.0 (Current) ✅
+- [x] Three-stage workflow
+- [x] Intelligent slot management
+- [x] Template system
+- [x] RAGFlow integration
+- [x] Multi-platform support
 
-### v1.1（规划中）🚧
-- [ ] 可视化流程编辑器
-- [ ] 更多占位符类型
-- [ ] 客户画像分析
-- [ ] A/B 测试框架
+### v1.1 (Planned) 🚧
+- [ ] Visual workflow editor
+- [ ] More placeholder types
+- [ ] Customer profiling analysis
+- [ ] A/B testing framework
 
-### v2.0（未来）🔮
-- [ ] 多语言支持（英文、日文）
-- [ ] 语音对话支持
-- [ ] 视频演示生成
-- [ ] CRM 深度集成
-- [ ] 自动学习优化
+### v2.0 (Future) 🔮
+- [ ] Multi-language support (English, Japanese)
+- [ ] Voice dialogue support
+- [ ] Video demo generation
+- [ ] Deep CRM integration
+- [ ] Auto-learning optimization
 
 ---
 
-## 📝 开源声明
+## 📝 Open Source Acknowledgments
 
-本项目基于以下开源项目开发：
+This project is built upon the following open source projects:
 
 ### Hermes Agent
-- **许可证**: MIT License
-- **项目地址**: https://github.com/NousResearch/hermes-agent
-- **用途**: AI Agent 基础框架
-- **版权**: Copyright (c) 2025 Nous Research
+- **License**: MIT License
+- **Repository**: https://github.com/NousResearch/hermes-agent
+- **Usage**: AI Agent base framework
+- **Copyright**: Copyright (c) 2025 Nous Research
 
 ### RAGFlow
-- **许可证**: Apache 2.0 License
-- **项目地址**: https://github.com/infiniflow/ragflow
-- **用途**: RAG 检索增强生成引擎
-- **版权**: Copyright (c) InfiniFlow, Inc.
+- **License**: Apache 2.0 License
+- **Repository**: https://github.com/infiniflow/ragflow
+- **Usage**: RAG retrieval-augmented generation engine
+- **Copyright**: Copyright (c) InfiniFlow, Inc.
 
-完整的开源协议请查看 [LICENSES/](LICENSES/) 目录。
-
----
-
-## 📄 许可证
-
-**海獭 SmartSales AI** 的业务逻辑代码（presales 模块及相关配置）采用**专有许可证**。
-
-基础框架部分遵循原项目的开源协议（MIT 和 Apache 2.0）。
-
-商业使用请联系我们获取授权。
+Full open source licenses can be found in the [LICENSES/](LICENSES/) directory.
 
 ---
 
-## 🤝 商业合作
+## 📄 License
 
-### 💼 企业版
-- ✅ 私有化部署
-- ✅ 定制化开发
-- ✅ 技术支持（7x24）
-- ✅ 培训服务
-- ✅ SLA 保障
+The business logic code (presales module and related configurations) of **SmartSales AI** is under **proprietary license**.
 
-### 🎓 培训服务
-- AI 售前系统搭建培训
-- 模板设计最佳实践
-- 知识库管理培训
+The base framework components follow the original projects' open source licenses (MIT and Apache 2.0).
 
-### 🔧 定制开发
-- 行业定制方案
-- 系统集成（CRM/ERP）
-- 特殊功能开发
+For commercial use, please contact us for licensing.
 
 ---
 
-## 📧 联系我们
+## 🤝 Commercial Cooperation
+
+### 💼 Enterprise Edition
+- ✅ Private deployment
+- ✅ Custom development
+- ✅ Technical support (7x24)
+- ✅ Training services
+- ✅ SLA guarantee
+
+### 🎓 Training Services
+- AI presales system setup training
+- Template design best practices
+- Knowledge base management training
+
+### 🔧 Custom Development
+- Industry-specific solutions
+- System integration (CRM/ERP)
+- Special feature development
+
+---
+
+## 📧 Contact Us
 
 - 📮 **Email**: contact@smartsales-ai.com
-- 💬 **微信**: SmartSalesAI
-- 🌐 **官网**: https://smartsales-ai.com
-- 📱 **电话**: +86 xxx-xxxx-xxxx
+- 💬 **WeChat**: SmartSalesAI
+- 🌐 **Website**: https://smartsales-ai.com
+- 📱 **Phone**: +86 xxx-xxxx-xxxx
 
-- 🐛 **Bug 反馈**: [GitHub Issues](https://github.com/AaronWander/HT-SmartSales/issues)
-- 💡 **功能建议**: [GitHub Discussions](https://github.com/AaronWander/HT-SmartSales/discussions)
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/AaronWander/HT-SmartSales/issues)
+- 💡 **Feature Requests**: [GitHub Discussions](https://github.com/AaronWander/HT-SmartSales/discussions)
 
 ---
 
 ## 🌟 Star History
 
-如果这个项目对你有帮助，请给我们一个 ⭐️ Star！
+If this project helps you, please give us a ⭐️ Star!
 
 [![Star History Chart](https://api.star-history.com/svg?repos=AaronWander/HT-SmartSales&type=Date)](https://star-history.com/#AaronWander/HT-SmartSales&Date)
 
 ---
 
 <p align="center">
-  <strong>海獭 SmartSales AI - 让售前更智能 🦦</strong>
+  <strong>SmartSales AI - Smarter Presales 🦦</strong>
   <br>
   <sub>Built with ❤️ by the SmartSales Team</sub>
 </p>
 
 <p align="center">
-  <a href="#top">回到顶部 ⬆️</a>
+  <a href="#top">Back to Top ⬆️</a>
 </p>
