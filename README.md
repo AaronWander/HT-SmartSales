@@ -559,10 +559,8 @@ For commercial use, please contact us for licensing.
 
 ## 📧 Contact Us
 
-- 📮 **Email**: contact@smartsales-ai.com
-- 💬 **WeChat**: SmartSalesAI
-- 🌐 **Website**: https://smartsales-ai.com
-- 📱 **Phone**: +86 xxx-xxxx-xxxx
+- 📮 **Email**: aaronwander1994@gmail.com
+- 🐦 **X (Twitter)**: https://x.com/Aaron_Wander
 
 - 🐛 **Bug Reports**: [GitHub Issues](https://github.com/AaronWander/HT-SmartSales/issues)
 - 💡 **Feature Requests**: [GitHub Discussions](https://github.com/AaronWander/HT-SmartSales/discussions)
