@@ -1,0 +1,57 @@
+id: 客户专属穿搭服务
+required_base:
+  - customer_name
+  - height_cm
+  - weight_kg
+  - bust_cm
+  - waist_cm
+  - hip_cm
+  - style_preferences
+  - core_needs
+  - avoid_elements
+  - budget_range
+  - climate_city
+  - work_context
+  - size_habits
+required_for_handoff: []
+optional: []
+meta:
+  customer_name:
+    label: 客户姓名
+    desc: 客户称呼或姓名（用于方案抬头）
+  height_cm:
+    label: 身高
+    desc: 身高（厘米 cm）
+  weight_kg:
+    label: 体重
+    desc: 体重（公斤 kg）
+  bust_cm:
+    label: 胸围
+    desc: 胸围（厘米 cm，可选但建议提供）
+  waist_cm:
+    label: 腰围
+    desc: 腰围（厘米 cm，可选但建议提供）
+  hip_cm:
+    label: 臀围
+    desc: 臀围（厘米 cm，可选但建议提供）
+  style_preferences:
+    label: 偏好风格
+    desc: 偏好的穿搭风格（可多选，例如通勤/法式/韩系/复古等）
+  core_needs:
+    label: 核心穿搭需求
+    desc: 最想达成的穿搭效果（例如显瘦显高/通勤/约会出片/舒适等）
+  avoid_elements:
+    label: 禁忌元素
+    desc: 不喜欢或需要避免的元素（颜色/版型/材质/暴露度等）
+  budget_range:
+    label: 预算范围
+    desc: 预算范围（单件/整套均可，给一个区间更好）
+  climate_city:
+    label: 气候/城市
+    desc: 所在城市或气候特征（例如北京春秋温差大/南方潮湿等）
+  work_context:
+    label: 职业/通勤强度
+    desc: 工作/通勤场景（是否正式、出差频率、活动量等）
+  size_habits:
+    label: 穿着习惯
+    desc: 尺码与穿着习惯（偏宽松/修身、常穿尺码、忌讳紧身等）

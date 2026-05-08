@@ -377,6 +377,77 @@ DEFAULT_CONFIG = {
         # (force on/off for all models), or a list of model-name substrings
         # to match (e.g. ["gpt", "codex", "gemini", "qwen"]).
         "tool_use_enforcement": "auto",
+        #2027-04-28-zty-start
+        # Hybrid RAGFlow retrieval policy:
+        # - "off": disable host-level RAG prefetch/guard
+        # - "on"/"auto" (default): heuristic prefetch + one guard attempt
+        # - "always": prefetch every turn when ragflow_completion is available
+        "ragflow_hybrid_mode": "on",
+        # Presales MVP controls (RAG + slot alignment + answer gate)
+        "presales_enabled": False,
+        "presales_state_machine_enabled": True,
+        "presales_answer_gate_enabled": True,
+        "presales_slot_assessment_mode": "llm_structured",
+        "presales_slot_assessment_max_tokens": 1200,
+        # Proposal template RAG placeholders: use an LLM to plan the query
+        # from intent + confirmed slots (recommended for non-fixed domains).
+        "presales_template_rag_query_planner_enabled": True,
+        "presales_template_rag_query_planner_max_tokens": 220,
+        # Proposal template rendering: max RAG calls per turn for filling
+        # multiple {{rag}} placeholders in one shot.
+        "presales_template_rag_max_calls_per_turn": 4,
+        # Proposal template rendering: max AI generations for filling multiple
+        # {{ai}} placeholders in one shot (auto intent derived from line context).
+        "presales_template_ai_max_calls_per_turn": 8,
+        "presales_template_ai_max_tokens": 500,
+        # How to render empty RAG results inside proposal templates.
+        # Values: "" | "(not_found)" | "(pending)"
+        "presales_template_rag_empty_render": "",
+        # Business-layer output referee: when enabled, trims/rewrites responses
+        # that violate the current presales stage constraints (e.g. long
+        # proposals during info collection).
+        "presales_output_referee_enabled": True,
+        # Side-question routing during info_collection: when user asks a
+        # question unrelated to missing slots (e.g. pricing, process, policy),
+        # answer it first, then return to the next missing slot question.
+        "presales_side_question_router_enabled": True,
+        "presales_user_intent_classifier_enabled": True,
+        "presales_user_intent_classifier_max_tokens": 160,
+        # Presales memory isolation: do not inject memory context during presales
+        # stages to avoid cross-customer data bleed. (Slots are session-scoped.)
+        "presales_disable_memory_injection": True,
+        # Generate one natural, single-question prompt for the next missing slot.
+        # If disabled, fallback to a simple template-label based question.
+        "presales_question_generator_enabled": True,
+        "presales_question_generator_max_tokens": 120,
+        # When enabled, info_collection responses are forced into a single
+        # next-question (plus optional short acknowledgement) unless the user
+        # explicitly asked for advice/proposal. This prevents the model from
+        # outputting multi-question questionnaires.
+        "presales_single_question_enforcement": True,
+        # When presales_single_question_enforcement is False, Hermes can ask
+        # multiple missing-slot questions in one turn during info_collection.
+        # This reduces overall turns/tool overhead at the cost of a longer message.
+        # Hard-bounded to [1, 8] at runtime.
+        "presales_info_collection_questions_per_turn": 3,
+        # Presales "discovery" stage: behave like a normal assistant until the
+        # user expresses intent to get a proposal based on the active template.
+        "presales_activation_enabled": True,
+        "presales_activation_mode": "llm",  # "llm" | "heuristic"
+        "presales_activation_max_tokens": 120,
+        "presales_discovery_intro_enabled": True,
+        "presales_discovery_intro_once_per_session": True,
+        # Slot assessment is LLM-driven; still bound how many currently-missing
+        # slots we force-evaluate per turn (cost/latency guard).
+        "max_missing_eval_per_turn": 6,
+        "ragflow_single_retrieval_mode": True,
+        "ragflow_max_calls_per_turn": 1,
+        "ragflow_query_dedupe_ttl_seconds": 600,
+        "ragflow_failure_mode": "clarify_only",
+        "presales_max_clarify_questions_per_turn": 1,
+        "presales_show_source_doc_names": True,
+        "presales_max_visible_sources": 2,
+        #2027-04-28-zty-end
         # Staged inactivity warning: send a warning to the user at this
         # threshold before escalating to a full timeout.  The warning fires
         # once per run and does not interrupt the agent.  0 = disable warning.
@@ -459,6 +530,24 @@ DEFAULT_CONFIG = {
         # via TERMINAL_LOCAL_PERSISTENT env var.
         "persistent_shell": True,
     },
+    #2027-04-28-zty-start
+    "presales": {
+        # Business service definitions live in project files, not Python code:
+        #   presales_services/<服务名>/proposal.md
+        #   presales_services/<服务名>/slots.yaml
+        #
+        # `services_dir` is resolved relative to the current project working
+        # directory when not absolute.
+        "services_dir": "presales_services",
+        "slots": {},
+        "session_overrides": {},
+        "confidence_thresholds": {
+            "high_slot_coverage": 0.8,
+            "medium_slot_coverage": 0.5,
+        },
+        "proposal_template_path": "",
+    },
+    #2027-04-28-zty-end
     
     "browser": {
         "inactivity_timeout": 120,

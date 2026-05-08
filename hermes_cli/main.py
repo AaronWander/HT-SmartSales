@@ -7288,6 +7288,49 @@ def cmd_dashboard(args):
         embedded_chat=embedded_chat,
     )
 
+#2027-04-30-zty-start
+# Hang diagnostics: allow dumping all Python thread stacks on demand when the
+# interactive CLI appears "frozen" (prompt_toolkit event loop wedged, stuck HTTP
+# call, deadlock, etc.). Send `kill -USR2 <pid>` from another terminal to write
+# to ~/.hermes/logs/cli_hang_dump.log (profile-aware via get_hermes_home()).
+_HANG_DUMP_FH = None
+
+
+def _install_cli_hang_dump_signal() -> None:
+    try:
+        import faulthandler
+        import signal
+
+        if not hasattr(signal, "SIGUSR2"):
+            return
+
+        raw = str(os.environ.get("HERMES_CLI_HANG_DUMP", "1") or "").strip().lower()
+        if raw in {"0", "false", "off", "no"}:
+            return
+
+        from hermes_constants import get_hermes_home
+
+        log_path = get_hermes_home() / "logs" / "cli_hang_dump.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        global _HANG_DUMP_FH
+        if _HANG_DUMP_FH is None:
+            _HANG_DUMP_FH = open(log_path, "a", encoding="utf-8")
+            try:
+                _HANG_DUMP_FH.write(
+                    f"\n=== hang dump enabled (signal=SIGUSR2) - {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n"
+                )
+                _HANG_DUMP_FH.flush()
+            except Exception:
+                pass
+
+        # idempotent in practice; even if registered twice it's harmless.
+        faulthandler.register(signal.SIGUSR2, file=_HANG_DUMP_FH, all_threads=True)
+    except Exception:
+        # Never fail the CLI on diagnostic wiring.
+        return
+#2027-04-30-zty-end
+
 
 def cmd_completion(args, parser=None):
     """Print shell completion script."""
@@ -7325,6 +7368,9 @@ def cmd_logs(args):
 
 def main():
     """Main entry point for hermes CLI."""
+    #2027-04-30-zty-start
+    _install_cli_hang_dump_signal()
+    #2027-04-30-zty-end
     parser = argparse.ArgumentParser(
         prog="hermes",
         description="Hermes Agent - AI assistant with tool-calling capabilities",

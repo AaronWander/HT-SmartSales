@@ -6281,7 +6281,7 @@ class HermesCLI:
                     _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
         
         return True
-    
+
     def _handle_background_command(self, cmd: str):
         """Handle /background <prompt> — run a prompt in a separate background session.
 

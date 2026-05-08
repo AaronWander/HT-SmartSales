@@ -17,6 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from agent.codex_responses_adapter import _chat_messages_to_responses_input, _normalize_codex_response, _preflight_codex_input_items
+#2027-04-28-zty-start
+from agent.presales_policy import SlotAssessment
+#2027-04-28-zty-end
 
 import run_agent
 from run_agent import AIAgent
@@ -93,6 +96,30 @@ def agent_with_memory_tool():
         )
         a.client = MagicMock()
         return a
+
+
+#2027-04-28-zty-start
+@pytest.fixture()
+def agent_with_ragflow_tool():
+    """Agent whose valid_tool_names includes 'ragflow_completion'."""
+    with (
+        patch(
+            "run_agent.get_tool_definitions",
+            return_value=_make_tool_defs("web_search", "ragflow_completion"),
+        ),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        a = AIAgent(
+            api_key="test-k...7890",
+            base_url="https://openrouter.ai/api/v1",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        a.client = MagicMock()
+        return a
+#2027-04-28-zty-end
 
 
 @pytest.fixture()
@@ -2130,6 +2157,59 @@ class TestRunConversation:
         agent.tool_delay = 0
         agent.compression_enabled = False
         agent.save_trajectories = False
+        # Presales unit tests in this file assume the default slot schema
+        # (e.g. business_goal, constraints, ...) unless a test explicitly
+        # sets a template. The repo's local config/templates can override
+        # presales slots at runtime, which would cause JSON assessments for
+        # default slots to be dropped as "invalid slot". Keep tests hermetic.
+        agent._presales_config_raw = {}
+        # Keep presales unit tests deterministic: avoid discovery intro text and
+        # avoid forcing single-question clarify overrides unless a test opts in.
+        try:
+            if hasattr(agent, "_presales_runtime") and agent._presales_runtime:
+                agent._presales_runtime.discovery_intro_enabled = False
+                agent._presales_runtime.single_question_enforcement = False
+                agent._presales_runtime.question_generator_enabled = False
+        except Exception:
+            pass
+        # Default presales tests operate directly in info_collection stage.
+        # Seed an in-memory presales state so _presales_on_turn_start() will
+        # not early-return in discovery stage due to activation heuristics.
+        try:
+            if hasattr(agent, "_presales_in_memory_state") and hasattr(agent, "_presales_state_meta_key"):
+                key = agent._presales_state_meta_key()
+                agent._presales_in_memory_state[key] = {
+                    "in_flow": True,
+                    "stage": "info_collection",
+                    "slots": {},
+                    "rag_cache": {},
+                    "metrics": {"retrieved": 0, "cache_hit": 0, "clarify": 0},
+                    "last_turn": {},
+                }
+        except Exception:
+            pass
+
+    def _set_test_business_slots(self, agent):
+        agent._presales_config_raw = {
+            "slots": {
+                "default": {
+                    "required_base": [
+                        "business_goal",
+                        "scenario",
+                        "core_requirements",
+                        "constraints",
+                    ],
+                    "required_for_handoff": [],
+                    "optional": [],
+                    "meta": {
+                        "business_goal": {"label": "业务目标", "desc": "你们这次最核心的业务目标是什么？"},
+                        "scenario": {"label": "应用场景", "desc": "这套能力会落在哪个具体业务场景？"},
+                        "core_requirements": {"label": "核心需求", "desc": "你最优先要解决的核心需求是什么？"},
+                        "constraints": {"label": "约束条件", "desc": "项目周期或预算上有什么明确约束吗？"},
+                    },
+                }
+            }
+        }
 
     def test_stop_finish_reason_returns_response(self, agent):
         self._setup_agent(agent)
@@ -2161,6 +2241,485 @@ class TestRunConversation:
         assert result["api_calls"] == 2
         assert mock_handle_function_call.call_args.kwargs["tool_call_id"] == "c1"
         assert mock_handle_function_call.call_args.kwargs["session_id"] == agent.session_id
+
+    #2027-04-28-zty-start
+    def test_ragflow_hybrid_prefetch_injects_context(self, agent_with_ragflow_tool):
+        agent = agent_with_ragflow_tool
+        self._setup_agent(agent)
+
+        api_calls = []
+
+        def _fake_api_call(api_kwargs):
+            api_calls.append(api_kwargs)
+            return _mock_response(content="Grounded answer", finish_reason="stop")
+
+        rag_result = json.dumps(
+            {
+                "success": True,
+                "result": {
+                    "answer": "Enterprise refund policy: 7 days for monthly plans.",
+                    "reference": [{"doc": "refund-policy.md"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with (
+            patch("run_agent.handle_function_call", return_value=rag_result) as mock_handle,
+            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("What is your refund policy?")
+
+        assert result["final_response"] == "Grounded answer"
+        assert result["completed"] is True
+        assert mock_handle.call_count == 1
+        assert mock_handle.call_args.args[0] == "ragflow_completion"
+        first_user = next(
+            m for m in api_calls[0]["messages"] if isinstance(m, dict) and m.get("role") == "user"
+        )
+        assert "<ragflow-context>" in first_user["content"]
+        assert "Enterprise refund policy" in first_user["content"]
+
+    def test_ragflow_hybrid_guard_retries_with_injected_context(self, agent_with_ragflow_tool):
+        agent = agent_with_ragflow_tool
+        self._setup_agent(agent)
+        agent._ragflow_hybrid_mode = "always"
+
+        api_calls = []
+        responses = [
+            _mock_response(content="Our refund details are available.", finish_reason="stop"),
+            _mock_response(content="Final grounded answer.", finish_reason="stop"),
+        ]
+
+        def _fake_api_call(api_kwargs):
+            api_calls.append(api_kwargs)
+            return responses[len(api_calls) - 1]
+
+        with (
+            patch.object(
+                agent,
+                "_run_ragflow_hybrid_lookup",
+                side_effect=[
+                    ("", False),  # prefetch failed/empty
+                    ("<ragflow-context>guard-hit</ragflow-context>", True),  # guard injects
+                ],
+            ) as mock_lookup,
+            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("Need details.")
+
+        assert result["final_response"] == "Final grounded answer."
+        assert result["api_calls"] == 2
+        assert mock_lookup.call_count == 2
+
+        first_user = next(
+            m for m in api_calls[0]["messages"] if isinstance(m, dict) and m.get("role") == "user"
+        )
+        second_user = next(
+            m for m in api_calls[1]["messages"] if isinstance(m, dict) and m.get("role") == "user"
+        )
+        assert "guard-hit" not in first_user["content"]
+        assert "Before finalizing" in second_user["content"]
+        assert "guard-hit" in second_user["content"]
+
+    def test_presales_answer_gate_returns_clarify_when_slots_missing(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = True
+        agent._presales_runtime.high_slot_coverage = 0.8
+
+        def _fake_api_call(api_kwargs):
+            return _mock_response(content="Here is a detailed solution plan.", finish_reason="stop")
+
+        with (
+            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("你好")
+
+        # Answer gate appends the next missing-slot question when slot coverage is low.
+        assert "业务目标" in result["final_response"] or "business_goal" in result["final_response"]
+
+    def test_presales_turn_start_does_not_fill_slot_from_keyword_candidate(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+
+        with patch.object(agent, "_presales_assess_slots", return_value=[]):
+            agent._presales_on_turn_start("预算这个事情还没定，目标也还在讨论。")
+
+        assert agent._presales_active_state["slots"] == {}
+        assert set(agent._presales_turn_missing_slots) >= {"business_goal", "constraints"}
+        assert agent._presales_turn_coverage == 0.0
+
+    def test_presales_turn_start_merges_structured_slot_assessments(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+
+        with patch.object(
+            agent,
+            "_presales_assess_slots",
+            return_value=[
+                SlotAssessment(
+                    slot="business_goal",
+                    status="full",
+                    value="提升售前咨询效率",
+                    evidence="我们想让AI先接待客户，提高售前效率",
+                    confidence=0.92,
+                    reason="明确业务目标",
+                ),
+                SlotAssessment(
+                    slot="constraints",
+                    status="partial",
+                    value="预算未定",
+                    evidence="预算这个事情还没定",
+                    confidence=0.85,
+                    reason="提到预算但没有明确约束",
+                ),
+            ],
+        ):
+            agent._presales_on_turn_start("我们想让AI先接待客户，提高售前效率，预算这个事情还没定。")
+
+        slots = agent._presales_active_state["slots"]
+        assert slots["business_goal"]["status"] == "full"
+        assert slots["constraints"]["status"] == "partial"
+        assert "constraints" in agent._presales_turn_missing_slots
+        assert agent._presales_turn_coverage == 0.25
+
+    def test_presales_slot_assessor_parses_model_json(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        agent.api_mode = "chat_completions"
+        payload = json.dumps(
+            {
+                "assessments": [
+                    {
+                        "slot": "business_goal",
+                        "status": "full",
+                        "value": "提升售前效率",
+                        "evidence": "我们想让AI先接待客户，提高售前效率",
+                        "confidence": 0.91,
+                        "reason": "客户明确说明目标",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+        with patch.object(agent, "_interruptible_api_call", return_value=_mock_response(content=payload)) as mock_call:
+            assessments = agent._presales_assess_slots(
+                user_message="我们想让AI先接待客户，提高售前效率。",
+                resolved_slots=agent._resolved_presales_slots(),
+                candidate_slots=["business_goal"],
+            )
+
+        assert assessments[0].slot == "business_goal"
+        assert assessments[0].status == "full"
+        assert assessments[0].evidence == "我们想让AI先接待客户，提高售前效率"
+        sent_messages = mock_call.call_args.args[0]["messages"]
+        assert "只输出 JSON" in sent_messages[0]["content"]
+        assert "关键词命中不能直接算 full" in sent_messages[1]["content"]
+
+    def test_presales_answer_gate_records_decision_and_stage(self, agent):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = True
+        agent._presales_runtime.single_question_enforcement = False
+        agent._presales_runtime.high_slot_coverage = 0.8
+        agent._presales_runtime.medium_slot_coverage = 0.5
+        agent._presales_active_state = {
+            "in_flow": True,
+            "stage": "info_collection",
+            "last_turn": {},
+            "metrics": {"clarify": 0},
+        }
+        agent._presales_turn_missing_slots = ["constraints"]
+        agent._presales_turn_coverage = 0.5
+        agent._presales_turn_rag_attempted = True
+        agent._presales_turn_rag_success = True
+
+        response = agent._presales_apply_answer_gate("可以先按销售接待场景设计方案。")
+
+        assert "可以先按销售接待场景设计方案。" in response
+        assert "项目周期或预算上有什么明确约束吗？" in response
+        assert agent._presales_active_state["stage"] == "info_collection"
+        assert agent._presales_active_state["last_turn"]["answer_gate"]["confidence"] == "medium"
+        assert agent._presales_active_state["last_turn"]["stage_transition"]["stage"] == "info_collection"
+        assert agent._presales_active_state["metrics"]["clarify"] == 1
+
+    def test_presales_state_machine_runs_when_answer_gate_disabled(self, agent):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = False
+        agent._presales_runtime.state_machine_enabled = True
+        agent._presales_active_state = {
+            "in_flow": True,
+            "stage": "info_collection",
+            "last_turn": {},
+            "metrics": {"clarify": 0},
+        }
+        agent._presales_turn_missing_slots = []
+        agent._presales_turn_coverage = 1.0
+
+        response = agent._presales_apply_answer_gate("建议先做 PoC。")
+
+        # New presales workflow: when required slots are already full, the
+        # agent enters info_summarization and emits a summary awaiting confirmation.
+        assert "信息整理" in response or "整理如下" in response
+        assert agent._presales_active_state["stage"] in {"info_summarization", "proposal"}
+        assert agent._presales_active_state["last_turn"]["stage_transition"]["reason"] in {
+            "required_slots_full",
+            "awaiting_info_summary_confirm",
+            "confirmed_info_summary",
+        }
+
+    def test_presales_natural_language_confirm_advances_summary_to_proposal(self, agent, tmp_path):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = False
+        agent._presales_runtime.state_machine_enabled = True
+        agent._presales_active_state = {
+            "in_flow": True,
+            "stage": "info_summarization",
+            "slots": {},
+            "summary": {"stage": "info_summarization"},
+            "resolved_slots": {"required_base": [], "required_for_handoff": [], "optional": []},
+            "resolved_slots_meta": {},
+            "last_turn": {},
+            "metrics": {"clarify": 0},
+        }
+        agent._presales_turn_missing_slots = []
+        agent._presales_turn_coverage = 1.0
+        agent._presales_active_state["last_turn"]["user_intent"] = "confirm"
+
+        with patch.object(
+            agent,
+            "_presales_render_proposal_from_template",
+            return_value=SimpleNamespace(markdown="方案内容", data={"ok": True}),
+        ), patch(
+            "run_agent._presales_default_proposal_output_path",
+            return_value=str(tmp_path / "proposal.md"),
+        ):
+            response = agent._presales_apply_answer_gate("收到，信息确认无误。")
+
+        assert "方案内容" in response
+        assert agent._presales_active_state["stage"] == "proposal"
+        assert agent._presales_active_state["in_flow"] is False
+        assert agent._presales_active_state["last_turn"]["flow_completed"] is True
+        assert agent._presales_active_state["last_turn"]["proposal_written_path"] == str(tmp_path / "proposal.md")
+        assert (tmp_path / "proposal.md").exists()
+        assert agent._presales_active_state["last_turn"]["stage_transition"]["reason"] == "confirmed_info_summary"
+
+    def test_presales_completed_flow_does_not_regenerate_proposal(self, agent):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = False
+        agent._presales_runtime.state_machine_enabled = True
+        agent._presales_active_state = {
+            "in_flow": False,
+            "stage": "proposal",
+            "proposal_sent": True,
+            "slots": {},
+            "summary": {"stage": "info_summarization"},
+            "proposal": {"path": "already-written.md"},
+            "resolved_slots": {"required_base": [], "required_for_handoff": [], "optional": []},
+            "resolved_slots_meta": {},
+            "last_turn": {"flow_completed": True},
+            "metrics": {"clarify": 0},
+        }
+        agent._presales_turn_missing_slots = []
+        agent._presales_turn_coverage = 1.0
+
+        with patch.object(agent, "_presales_render_proposal_from_template") as mock_render:
+            response = agent._presales_apply_answer_gate("非常好感谢。")
+
+        assert response == "非常好感谢。"
+        assert mock_render.call_count == 0
+        assert agent._presales_active_state["in_flow"] is False
+        assert agent._presales_active_state["last_turn"]["flow_completed"] is True
+
+    def test_presales_service_catalog_uses_template_title(self, agent, tmp_path):
+        agent._presales_runtime.enabled = True
+        template = tmp_path / "proposal.md"
+        template.write_text("# 客户专属穿搭方案（模板）\n\n正文", encoding="utf-8")
+        agent._presales_config_raw = {"proposal_template_path": str(template)}
+        agent._compile_presales_templates()
+
+        context = agent._presales_service_catalog_context()
+
+        assert "客户专属穿搭服务" in context
+        assert "数字化转型" not in context
+
+    def test_run_conversation_injects_presales_service_catalog(self, agent, tmp_path):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        template = tmp_path / "proposal.md"
+        template.write_text("# 客户专属穿搭方案\n\n正文", encoding="utf-8")
+        agent._presales_config_raw = {"proposal_template_path": str(template)}
+        agent._compile_presales_templates()
+        if hasattr(agent, "_presales_in_memory_state") and hasattr(agent, "_presales_state_meta_key"):
+            agent._presales_in_memory_state[agent._presales_state_meta_key()] = {
+                "in_flow": False,
+                "stage": "info_collection",
+                "slots": {},
+                "rag_cache": {},
+                "metrics": {"retrieved": 0, "cache_hit": 0, "clarify": 0},
+                "last_turn": {},
+            }
+
+        api_calls = []
+
+        def _fake_api_call(api_kwargs):
+            api_calls.append(api_kwargs)
+            return _mock_response(content="目前提供客户专属穿搭服务。", finish_reason="stop")
+
+        with (
+            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("你们有什么服务")
+
+        assert "客户专属穿搭服务" in result["final_response"]
+        first_user = next(
+            m for m in api_calls[0]["messages"] if isinstance(m, dict) and m.get("role") == "user"
+        )
+        assert "客户专属穿搭服务" in first_user["content"]
+
+    def test_presales_service_directory_loads_slots_yaml(self, agent, tmp_path, monkeypatch):
+        agent._presales_runtime.enabled = True
+        root = tmp_path / "presales_services"
+        service = root / "客户专属穿搭服务"
+        service.mkdir(parents=True)
+        (service / "proposal.md").write_text(
+            "# 客户专属穿搭方案\n\n| 客户姓名 | {{slot:customer_name}} |\n| 身高 | {{slot:height_cm}} cm |\n",
+            encoding="utf-8",
+        )
+        (service / "slots.yaml").write_text(
+            """
+id: 客户专属穿搭服务
+required_base:
+  - customer_name
+  - height_cm
+required_for_handoff: []
+optional: []
+meta:
+  customer_name:
+    label: 客户姓名
+    desc: 客户称呼或姓名
+  height_cm:
+    label: 身高
+    desc: 身高，单位 cm
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        agent._presales_config_raw = {"services_dir": "presales_services"}
+
+        agent._compile_presales_templates()
+        resolved = agent._resolved_presales_slots()
+
+        assert resolved.required_base == ["customer_name", "height_cm"]
+        assert resolved.meta["customer_name"]["label"] == "客户姓名"
+        assert "客户专属穿搭服务" in agent._presales_service_catalog_context()
+
+    def test_presales_single_retrieval_blocks_second_rag_call_same_turn(self, agent_with_ragflow_tool):
+        agent = agent_with_ragflow_tool
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = False
+        agent._presales_runtime.single_retrieval_mode = True
+        agent._presales_runtime.rag_max_calls_per_turn = 1
+        agent._ragflow_hybrid_mode = "always"
+
+        rag_result = json.dumps(
+            {
+                "success": True,
+                "result": {"answer": "Refund window is 7 days.", "reference": [{"doc_name": "policy.md"}]},
+            },
+            ensure_ascii=False,
+        )
+        tc = _mock_tool_call(
+            name="ragflow_completion",
+            arguments=json.dumps({"question": "what is refund policy"}),
+            call_id="rag-1",
+        )
+        resp1 = _mock_response(content="", finish_reason="tool_calls", tool_calls=[tc])
+        resp2 = _mock_response(content="Done.", finish_reason="stop")
+
+        with (
+            patch("run_agent.handle_function_call", return_value=rag_result) as mock_handle,
+            patch.object(agent, "_interruptible_api_call", side_effect=[resp1, resp2]),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("what is refund policy?")
+
+        assert result["final_response"] == "Done."
+        # First call is hybrid prefetch; same-turn tool call is short-circuited.
+        assert mock_handle.call_count == 1
+
+    def test_presales_query_dedupe_reuses_cached_rag_context(self, agent_with_ragflow_tool):
+        agent = agent_with_ragflow_tool
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = False
+        agent._presales_runtime.single_retrieval_mode = True
+        agent._presales_runtime.rag_dedupe_ttl_seconds = 600
+        agent._ragflow_hybrid_mode = "always"
+
+        rag_result = json.dumps(
+            {
+                "success": True,
+                "result": {
+                    "answer": "Refund window is 7 days.",
+                    "reference": [{"doc_name": "policy.md"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        captured_calls = []
+
+        def _fake_api_call(api_kwargs):
+            captured_calls.append(api_kwargs)
+            return _mock_response(content="Done.", finish_reason="stop")
+
+        with (
+            patch("run_agent.handle_function_call", return_value=rag_result) as mock_handle,
+            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            first = agent.run_conversation("what is refund policy?")
+            second = agent.run_conversation("what is refund policy?", conversation_history=first["messages"])
+
+        # Deduped second turn should not hit ragflow_completion again.
+        assert mock_handle.call_count == 1
+        second_user = [
+            m for m in captured_calls[1]["messages"] if isinstance(m, dict) and m.get("role") == "user"
+        ][-1]
+        # Cached context is injected as either a ragflow-context block (prefetch)
+        # or a presales-rag-cache block (query dedupe), depending on which path
+        # was used.
+        assert ("<ragflow-context>" in second_user["content"]) or ("<presales-rag-cache>" in second_user["content"])
+        assert "policy.md" in second_user["content"]
+    #2027-04-28-zty-end
 
     def test_request_scoped_api_hooks_fire_for_each_api_call(self, agent):
         self._setup_agent(agent)

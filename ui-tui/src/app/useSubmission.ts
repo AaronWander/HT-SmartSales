@@ -241,7 +241,19 @@ export function useSubmission(opts: UseSubmissionOptions) {
           const text = value.startsWith('/') && row.text.startsWith('/') ? row.text.slice(1) : row.text
           const next = value.slice(0, composerState.compReplace) + text
 
-          if (next !== value) {
+          // TUI slash completion uses the prompt_toolkit completer, which
+          // intentionally appends a trailing space when the user has already
+          // typed the full command (e.g. `/help` -> completion text
+          // `help `). That behavior is great for dropdown UX, but in the TUI
+          // it causes Enter to *only* accept completion, requiring extra Enters
+          // before the command actually runs.
+          //
+          // Fix: if the only change is adding/removing trailing whitespace,
+          // treat Enter as a submit. This makes no-arg slash commands work in
+          // one keystroke, while keeping completion behavior for partial input.
+          const norm = (s: string) => s.replace(/\s+$/g, '')
+
+          if (norm(next) !== norm(value)) {
             return composerActions.setInput(next)
           }
         }

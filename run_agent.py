@@ -45,6 +45,7 @@ from openai import OpenAI
 import fire
 from datetime import datetime
 from pathlib import Path
+from datetime import date as _date, datetime as _dt
 
 from hermes_constants import get_hermes_home
 
@@ -117,6 +118,50 @@ from agent.trajectory import (
     convert_scratchpad_to_think, has_incomplete_scratchpad,
     save_trajectory as _save_trajectory_to_file,
 )
+from agent.presales_policy import (
+    PresalesRuntimeConfig,
+    ResolvedSlots,
+    resolve_slots_config,
+    SlotAssessment,
+    detect_slot_candidates,
+    merge_slot_assessments,
+    parse_slot_assessment_tool_args,
+    parse_slot_assessment_payload,
+    build_slot_assessment_messages,
+    heuristic_slot_assessments,
+    compute_missing_required,
+    slot_coverage,
+    query_hash,
+    now_ts,
+    build_rag_cache_context,
+    normalize_slot_value,
+    values_equivalent,
+    slot_overwrite_policy,
+    slot_conflict_policy,
+    slot_needs_confirmation,
+    next_clarify_question,
+    sort_missing_slots,
+)
+from agent.presales_answer_gate import (
+    AnswerGateConfig,
+    AnswerGateInput,
+    AnswerGateDecision,
+    evaluate_answer_gate,
+)
+from agent.presales_state_machine import (
+    PresalesStageInput,
+    advance_presales_stage,
+)
+#2027-05-04-zty-start
+from agent.presales_summarizer import build_presales_summary
+from agent.presales_proposal import (
+    build_proposal,
+    extract_template_placeholders,
+    extract_template_placeholder_instances,
+    default_output_path as _presales_default_proposal_output_path,
+)
+from agent.presales_confirm import load_presales_state, save_presales_state
+#2027-05-04-zty-end
 from utils import atomic_json_write, base_url_host_matches, base_url_hostname, env_var_enabled, normalize_proxy_url
 
 
@@ -1715,6 +1760,164 @@ class AIAgent:
         if not isinstance(_agent_section, dict):
             _agent_section = {}
         self._tool_use_enforcement = _agent_section.get("tool_use_enforcement", "auto")
+        #2027-04-28-zty-start
+        # RAGFlow hybrid retrieval policy:
+        # - "off": disable host-level RAG prefetch/guard
+        # - "on"/"auto" (default): heuristic prefetch + one guard attempt
+        # - "always": prefetch every turn when ragflow_completion is available
+        _rag_mode_raw = _agent_section.get("ragflow_hybrid_mode", "on")
+        if isinstance(_rag_mode_raw, bool):
+            self._ragflow_hybrid_mode = "on" if _rag_mode_raw else "off"
+        else:
+            _rag_mode = str(_rag_mode_raw or "on").strip().lower()
+            if _rag_mode in {"on", "auto", "smart", "true", "1", "yes"}:
+                self._ragflow_hybrid_mode = "on"
+            elif _rag_mode in {"always", "force"}:
+                self._ragflow_hybrid_mode = "always"
+            else:
+                self._ragflow_hybrid_mode = "off"
+
+        # Presales MVP policy config (slot-driven alignment + retrieval guardrails).
+        _presales_cfg = _agent_cfg.get("presales", {}) if isinstance(_agent_cfg, dict) else {}
+        if not isinstance(_presales_cfg, dict):
+            _presales_cfg = {}
+        _ct_cfg = _presales_cfg.get("confidence_thresholds", {})
+        if not isinstance(_ct_cfg, dict):
+            _ct_cfg = {}
+        self._presales_runtime = PresalesRuntimeConfig(
+            enabled=bool(_agent_section.get("presales_enabled", False)),
+            state_machine_enabled=bool(_agent_section.get("presales_state_machine_enabled", True)),
+            answer_gate_enabled=bool(_agent_section.get("presales_answer_gate_enabled", True)),
+            slot_assessment_mode=str(_agent_section.get("presales_slot_assessment_mode", "llm_structured") or "llm_structured"),
+            slot_assessment_max_tokens=max(256, int(_agent_section.get("presales_slot_assessment_max_tokens", 1200) or 1200)),
+            template_rag_query_planner_enabled=bool(
+                _agent_section.get("presales_template_rag_query_planner_enabled", True)
+            ),
+            template_rag_query_planner_max_tokens=max(
+                80, int(_agent_section.get("presales_template_rag_query_planner_max_tokens", 220) or 220)
+            ),
+            template_rag_max_calls_per_turn=max(
+                1, int(_agent_section.get("presales_template_rag_max_calls_per_turn", 4) or 4)
+            ),
+            template_ai_max_calls_per_turn=max(
+                1, int(_agent_section.get("presales_template_ai_max_calls_per_turn", 8) or 8)
+            ),
+            template_ai_max_tokens=max(
+                120, int(_agent_section.get("presales_template_ai_max_tokens", 500) or 500)
+            ),
+            template_rag_empty_render=str(_agent_section.get("presales_template_rag_empty_render", "") or ""),
+            output_referee_enabled=bool(_agent_section.get("presales_output_referee_enabled", True)),
+            side_question_router_enabled=bool(_agent_section.get("presales_side_question_router_enabled", True)),
+            user_intent_classifier_enabled=bool(_agent_section.get("presales_user_intent_classifier_enabled", True)),
+            user_intent_classifier_max_tokens=max(60, int(_agent_section.get("presales_user_intent_classifier_max_tokens", 160) or 160)),
+            disable_memory_injection=bool(_agent_section.get("presales_disable_memory_injection", True)),
+            question_generator_enabled=bool(_agent_section.get("presales_question_generator_enabled", True)),
+            question_generator_max_tokens=max(60, int(_agent_section.get("presales_question_generator_max_tokens", 120) or 120)),
+            single_question_enforcement=bool(_agent_section.get("presales_single_question_enforcement", True)),
+            info_collection_questions_per_turn=max(
+                1, int(_agent_section.get("presales_info_collection_questions_per_turn", 3) or 3)
+            ),
+            single_retrieval_mode=bool(_agent_section.get("ragflow_single_retrieval_mode", True)),
+            rag_max_calls_per_turn=max(1, int(_agent_section.get("ragflow_max_calls_per_turn", 1) or 1)),
+            rag_dedupe_ttl_seconds=max(0, int(_agent_section.get("ragflow_query_dedupe_ttl_seconds", 600) or 600)),
+            rag_failure_mode=str(_agent_section.get("ragflow_failure_mode", "clarify_only") or "clarify_only"),
+            max_clarify_questions_per_turn=max(1, int(_agent_section.get("presales_max_clarify_questions_per_turn", 1) or 1)),
+            show_source_doc_names=bool(_agent_section.get("presales_show_source_doc_names", True)),
+            max_visible_sources=max(0, int(_agent_section.get("presales_max_visible_sources", 2) or 2)),
+            high_slot_coverage=float(_ct_cfg.get("high_slot_coverage", 0.8) or 0.8),
+            medium_slot_coverage=float(_ct_cfg.get("medium_slot_coverage", 0.5) or 0.5),
+            activation_enabled=bool(_agent_section.get("presales_activation_enabled", True)),
+            activation_mode=str(_agent_section.get("presales_activation_mode", "llm") or "llm"),
+            activation_max_tokens=max(60, int(_agent_section.get("presales_activation_max_tokens", 120) or 120)),
+            # Discovery stage removed; keep config fields for backward
+            # compatibility but default them off.
+            discovery_intro_enabled=bool(_agent_section.get("presales_discovery_intro_enabled", False)),
+            discovery_intro_once_per_session=bool(
+                _agent_section.get("presales_discovery_intro_once_per_session", True)
+            ),
+        )
+        self._presales_config_raw = _presales_cfg
+        # Preferred missing-slot order/labels derived from the proposal template.
+        # Initialized here, then overwritten by template compilation below.
+        # IMPORTANT: do not reset these after compilation.
+        self._presales_template_slot_order: list[str] = []
+        self._presales_template_slot_labels: Dict[str, str] = {}
+        #2027-05-05-zty-start
+        self._presales_proposal_template_md: str = ""
+        try:
+            _tmpl_path = ""
+            if isinstance(_presales_cfg, dict):
+                _tmpl_path = str(_presales_cfg.get("proposal_template_path") or "").strip()
+            if _tmpl_path:
+                from pathlib import Path as _Path
+                from hermes_constants import get_hermes_home as _get_home
+                p = _Path(_tmpl_path)
+                if not p.is_absolute():
+                    p = _get_home() / _tmpl_path
+                if p.exists():
+                    self._presales_proposal_template_md = p.read_text(encoding="utf-8")
+        except Exception:
+            self._presales_proposal_template_md = ""
+        # Business-layer template/slot consistency checks (startup/restart only).
+        try:
+            if self._presales_proposal_template_md:
+                rs0 = resolve_slots_config(presales_cfg=self._presales_config_raw)
+                slot_names = set(rs0.required_base + rs0.required_for_handoff + rs0.optional)
+                instances = extract_template_placeholder_instances(self._presales_proposal_template_md)
+                used_slots = set()
+                template_slot_order: list[str] = []
+                template_slot_labels: Dict[str, str] = {}
+                used_rag = 0
+                used_ai = 0
+                for inst in instances or []:
+                    if not isinstance(inst, dict):
+                        continue
+                    kind = str(inst.get("kind") or "").strip().lower()
+                    payload = str(inst.get("payload") or "").strip()
+                    if kind == "slot" and payload:
+                        used_slots.add(payload)
+                        if payload not in template_slot_order:
+                            template_slot_order.append(payload)
+                        # Best-effort label extraction from the containing line.
+                        # Common pattern: "| 身高 | {{slot:height_cm}} cm |"
+                        try:
+                            line = str(inst.get("line") or "").strip()
+                            if line:
+                                parts = [p.strip() for p in line.strip().strip("|").split("|")]
+                                if parts:
+                                    candidate_label = parts[0].strip()
+                                    # Guard: avoid capturing markdown separators.
+                                    if candidate_label and candidate_label not in {"---", "--", "项目", "内容"} and len(candidate_label) <= 30:
+                                        template_slot_labels[payload] = candidate_label
+                        except Exception:
+                            pass
+                    elif kind == "rag":
+                        used_rag += 1
+                    elif kind == "ai":
+                        used_ai += 1
+                missing_defs = sorted(s for s in used_slots if s not in slot_names)
+                unused_required = sorted(s for s in rs0.required_base if s not in used_slots)
+                if missing_defs:
+                    logger.warning("Presales template references undefined slots: %s", ", ".join(missing_defs))
+                if unused_required:
+                    logger.warning("Presales required_base slots not referenced in template: %s", ", ".join(unused_required))
+                logger.info("Presales template compile: slots_used=%d rag_placeholders=%d ai_placeholders=%d", len(used_slots), used_rag, used_ai)
+                # Persist template slot order so info collection can ask questions
+                # in the same order as the template (business-preferred default).
+                self._presales_template_slot_order = template_slot_order
+                self._presales_template_slot_labels = template_slot_labels
+        except Exception:
+            pass
+        #2027-05-05-zty-end
+        self._presales_in_memory_state: Dict[str, Any] = {}
+        self._presales_focus_slot: str = ""
+        self._presales_turn_rag_calls = 0
+        self._presales_turn_rag_attempted = False
+        self._presales_turn_rag_success = False
+        self._presales_turn_missing_slots: List[str] = []
+        self._presales_turn_coverage = 0.0
+        self._presales_active_state: Dict[str, Any] = {}
+        #2027-04-28-zty-end
 
         # App-level API retry count (wraps each model API call).  Default 3,
         # overridable via agent.api_max_retries in config.yaml.  See #11616.
@@ -2993,6 +3196,1916 @@ class AIAgent:
             marker in assistant_text for marker in workspace_markers
         )
         return (user_targets_workspace or assistant_targets_workspace) and assistant_mentions_action
+
+    #2027-04-28-zty-start
+    def _presales_state_meta_key(self) -> str:
+        sid = self.session_id or "default"
+        return f"presales_state:{sid}"
+
+    def _load_presales_state(self) -> Dict[str, Any]:
+        if not self._presales_runtime.enabled:
+            return {}
+        key = self._presales_state_meta_key()
+        raw = None
+        if self._session_db:
+            try:
+                raw = self._session_db.get_meta(key)
+            except Exception:
+                raw = None
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+        mem = self._presales_in_memory_state.get(key)
+        if isinstance(mem, dict):
+            return copy.deepcopy(mem)
+        return {}
+
+    def _save_presales_state(self, state: Dict[str, Any]) -> None:
+        if not self._presales_runtime.enabled:
+            return
+        key = self._presales_state_meta_key()
+        payload = json.dumps(state, ensure_ascii=False)
+        if self._session_db:
+            try:
+                self._session_db.set_meta(key, payload)
+                return
+            except Exception:
+                pass
+        self._presales_in_memory_state[key] = copy.deepcopy(state)
+
+    def _resolved_presales_slots(self) -> ResolvedSlots:
+        return resolve_slots_config(presales_cfg=self._presales_config_raw)
+
+    @staticmethod
+    def _presales_response_text(response: Any) -> str:
+        try:
+            choices = getattr(response, "choices", None)
+            if choices:
+                msg = getattr(choices[0], "message", None)
+                content = getattr(msg, "content", None)
+                if isinstance(content, str):
+                    return content
+        except Exception:
+            return ""
+        return ""
+
+    def _presales_assess_slots(
+        self,
+        *,
+        user_message: str,
+        resolved_slots: ResolvedSlots,
+        candidate_slots: List[str],
+    ) -> List[SlotAssessment]:
+        mode = str(self._presales_runtime.slot_assessment_mode or "llm_structured").strip().lower()
+        if mode in {"off", "none", "disabled"}:
+            return []
+        if mode not in {"llm_structured", "llm_json"}:
+            return []
+        if not candidate_slots:
+            return []
+        if self.api_mode != "chat_completions":
+            return []
+
+        messages = build_slot_assessment_messages(
+            user_text=user_message,
+            resolved_slots=resolved_slots,
+            candidate_slots=candidate_slots,
+        )
+
+        # IMPORTANT:
+        # DeepSeek's OpenAI-compatible endpoint supports tool calls, but does NOT
+        # support forcing a specific tool via tool_choice={"type":"function",...}
+        # nor tool_choice="required" (it can return HTTP 400 with a
+        # "deepseek-reasoner does not support this tool_choice" message).
+        #
+        # To keep slot "deposit" reliable across providers, we use JSON mode
+        # (response_format={"type":"json_object"}) and parse assistant content.
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            kwargs.update(self._max_tokens_param(self._presales_runtime.slot_assessment_max_tokens))
+        except Exception:
+            kwargs["max_tokens"] = self._presales_runtime.slot_assessment_max_tokens
+
+        try:
+            response = self._interruptible_api_call(kwargs)
+            # Parse content JSON (primary behavior)
+            content = self._presales_response_text(response)
+            # Provide candidates hint for stricter parsing: attach to JSON payload
+            # by prefixing a synthetic field if the model didn't include it.
+            # This is optional; parse_slot_assessment_payload will ignore if missing.
+            if content and content.lstrip().startswith("{") and "\"__candidates__\"" not in content:
+                try:
+                    obj = json.loads(content)
+                    if isinstance(obj, dict) and "assessments" in obj and "__candidates__" not in obj:
+                        obj["__candidates__"] = list(candidate_slots or [])
+                        content = json.dumps(obj, ensure_ascii=False)
+                except Exception:
+                    pass
+            out2 = parse_slot_assessment_payload(content, resolved_slots=resolved_slots)
+            # Enforce candidate restriction even when the mock payload does not
+            # echo "__candidates__" (tests and some providers may omit it).
+            try:
+                want = set(str(s or "").strip() for s in (candidate_slots or []) if str(s or "").strip())
+                if want:
+                    out2 = [a for a in out2 if isinstance(a, SlotAssessment) and (a.status == "none" or a.slot in want)]
+            except Exception:
+                pass
+            if out2:
+                return out2
+
+            # Safety net: heuristic extraction
+            return heuristic_slot_assessments(user_text=user_message, candidate_slots=candidate_slots)
+        except Exception as exc:
+            logger.debug("Presales slot assessment failed: %s", exc)
+            return heuristic_slot_assessments(user_text=user_message, candidate_slots=candidate_slots)
+
+    def _presales_activation_heuristic(self, user_message: str) -> bool:
+        text = str(user_message or "").strip().lower()
+        if not text:
+            return False
+        # Lightweight intent cues. This is only a fallback when LLM mode is disabled.
+        cues = (
+            "需要",
+            "想要",
+            "帮我",
+            "做一份",
+            "出一份",
+            "方案",
+            "报价",
+            "设计",
+            "穿搭",
+            "搭配",
+            "形象",
+            "改造",
+            "服务",
+        )
+        return any(c in text for c in cues)
+
+    def _presales_should_activate(self, user_message: str) -> bool:
+        if not self._presales_runtime.enabled or not self._presales_runtime.activation_enabled:
+            return False
+        mode = str(self._presales_runtime.activation_mode or "llm").strip().lower()
+        if mode in {"heuristic", "keyword"}:
+            return self._presales_activation_heuristic(user_message)
+        if mode not in {"llm", "auto"}:
+            return False
+        if self.api_mode != "chat_completions":
+            return self._presales_activation_heuristic(user_message)
+
+        tmpl = str(getattr(self, "_presales_proposal_template_md", "") or "").strip()
+        # Best-effort template title for grounding.
+        title = ""
+        if tmpl:
+            for line in tmpl.splitlines():
+                if line.strip().startswith("#"):
+                    title = line.lstrip("#").strip()
+                    if title:
+                        break
+
+        system = (
+            "你是售前对话的意图识别器。"
+            "你只需要判断：用户这句话是否明确表达了要购买/使用你提供的方案服务，"
+            "从而需要进入“信息采集”阶段。"
+            "如果用户只是闲聊/问时间天气/问候/泛泛咨询，不要激活。"
+            "只输出JSON，不要输出其他文字。"
+        )
+        user = (
+            f"当前可交付的方案模板标题（供参考）：{title or '（未知）'}\n"
+            f"用户本轮输入：{str(user_message or '').strip()[:800]}\n\n"
+            "输出JSON格式：{\"activate\": true/false, \"reason\": \"...\"}"
+        )
+        kwargs: Dict[str, Any] = {"model": self.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        try:
+            kwargs.update(self._max_tokens_param(self._presales_runtime.activation_max_tokens))
+        except Exception:
+            kwargs["max_tokens"] = self._presales_runtime.activation_max_tokens
+
+        try:
+            resp = self._interruptible_api_call(kwargs)
+            content = self._presales_response_text(resp)
+            txt = str(content or "").strip()
+            if txt.startswith("```"):
+                txt = re.sub(r"^```(?:json)?\s*", "", txt)
+                txt = re.sub(r"\s*```$", "", txt)
+            data = json.loads(txt) if txt else {}
+            if isinstance(data, dict):
+                return bool(data.get("activate"))
+        except Exception:
+            return self._presales_activation_heuristic(user_message)
+        return False
+
+    def _presales_on_turn_start(self, user_message: str) -> None:
+        self._presales_turn_rag_calls = 0
+        self._presales_turn_rag_attempted = False
+        self._presales_turn_rag_success = False
+        self._presales_turn_missing_slots = []
+        self._presales_turn_coverage = 0.0
+        self._presales_active_state = {}
+
+        if not self._presales_runtime.enabled:
+            return
+
+        state = self._load_presales_state()
+        if not isinstance(state, dict):
+            state = {}
+        # Simplified flowchart: discovery stage removed.
+        # We track whether the session has entered the design flow via
+        # state["in_flow"] (bool). When in_flow is false, we do not write slots.
+        if not isinstance(state.get("in_flow"), bool):
+            state["in_flow"] = False
+        if not isinstance(state.get("slots"), dict):
+            state["slots"] = {}
+        if not isinstance(state.get("rag_cache"), dict):
+            state["rag_cache"] = {}
+        if not isinstance(state.get("metrics"), dict):
+            state["metrics"] = {"retrieved": 0, "cache_hit": 0, "clarify": 0}
+        # Default stage when entering design flow.
+        if not isinstance(state.get("stage"), str) or not str(state.get("stage") or "").strip():
+            state["stage"] = "info_collection"
+        if not isinstance(state.get("resolved_slots"), dict):
+            rs = self._resolved_presales_slots()
+            state["resolved_slots"] = {
+                "required_base": rs.required_base,
+                "required_for_handoff": rs.required_for_handoff,
+                "optional": rs.optional,
+            }
+            #2027-05-05-zty-start
+            # Store slot metadata separately so clarify questions and assessment
+            # prompts can use user-provided desc/label without code changes.
+            state["resolved_slots_meta"] = rs.meta if isinstance(rs.meta, dict) else {}
+            #2027-05-05-zty-end
+        #2027-05-05-zty-start
+        if not isinstance(state.get("resolved_slots_meta"), dict):
+            rs = self._resolved_presales_slots()
+            state["resolved_slots_meta"] = rs.meta if isinstance(rs.meta, dict) else {}
+        #2027-05-05-zty-end
+
+        rs_dict = state.get("resolved_slots", {})
+        #2027-05-05-zty-start
+        rs_meta = state.get("resolved_slots_meta", {}) if isinstance(state.get("resolved_slots_meta"), dict) else {}
+        #2027-05-05-zty-end
+        rs = ResolvedSlots(
+            required_base=list(rs_dict.get("required_base") or []),
+            required_for_handoff=list(rs_dict.get("required_for_handoff") or []),
+            optional=list(rs_dict.get("optional") or []),
+            #2027-05-05-zty-start
+            meta=rs_meta,
+            #2027-05-05-zty-end
+        )
+
+        #2027-05-05-zty-start
+        # Keep a small tail of user messages so template RAG query planning can
+        # incorporate "previous conversation" beyond the slot summary.
+        try:
+            tail = state.get("user_tail")
+            if not isinstance(tail, list):
+                tail = []
+                state["user_tail"] = tail
+            msg = str(user_message or "").strip()
+            if msg:
+                # Hard cap to keep meta small and safe.
+                if len(msg) > 600:
+                    msg = msg[:600] + "..."
+                tail.append(msg)
+                # Keep the last 6 user messages only.
+                if len(tail) > 6:
+                    state["user_tail"] = tail[-6:]
+        except Exception:
+            pass
+        #2027-05-05-zty-end
+
+        stage = str(state.get("stage") or "info_collection").strip() or "info_collection"
+        in_flow = bool(state.get("in_flow"))
+        # Not in the design flow yet: only decide whether to enter.
+        if not in_flow:
+            should_enter = self._presales_should_activate(user_message)
+            # Keep missing/coverage visible for observability.
+            try:
+                missing_now = compute_missing_required(resolved_slots=rs, filled_slots=state.get("slots", {}))
+                missing_now = sort_missing_slots(
+                    missing_now,
+                    slot_meta=rs.meta if isinstance(rs.meta, dict) else None,
+                    preferred_order=getattr(self, "_presales_template_slot_order", None),
+                )
+                coverage_now = slot_coverage(resolved_slots=rs, filled_slots=state.get("slots", {}))
+            except Exception:
+                missing_now = []
+                coverage_now = 1.0
+            lt = state.get("last_turn")
+            if not isinstance(lt, dict):
+                lt = {}
+                state["last_turn"] = lt
+            lt["user_message"] = str(user_message or "")[:800]
+            lt["missing_slots"] = missing_now
+            lt["coverage"] = coverage_now
+            lt["stage"] = "out_of_flow"
+            lt["in_flow"] = False
+            self._presales_turn_missing_slots = missing_now
+            self._presales_turn_coverage = coverage_now
+            self._presales_active_state = state
+            self._save_presales_state(state)
+            if not should_enter:
+                return
+            # Enter design flow: initialize stage and ask for missing slots.
+            state["in_flow"] = True
+            state["stage"] = "info_collection"
+            stage = "info_collection"
+            try:
+                lt["next_action"] = "ask_missing_slots"
+            except Exception:
+                pass
+
+        #2027-05-05-zty-start
+        # Auto-fill system slots (e.g. date/datetime) so the user does not need
+        # to provide them. Configure via presales.slots.default.meta:
+        #   meta:
+        #     date: {label: "日期", type: "auto_date"}
+        try:
+            slots_state = state.get("slots", {})
+            if not isinstance(slots_state, dict):
+                slots_state = {}
+                state["slots"] = slots_state
+            meta_map = rs.meta if isinstance(rs.meta, dict) else {}
+            for slot_key, meta in meta_map.items():
+                if not isinstance(meta, dict):
+                    continue
+                stype = str(meta.get("type") or "").strip().lower()
+                if stype in {"auto_date", "auto_now_date"}:
+                    if not isinstance(slots_state.get(slot_key), dict) or slots_state.get(slot_key, {}).get("status") != "full":
+                        slots_state[slot_key] = {
+                            "status": "full",
+                            "value": _date.today().isoformat(),
+                            "evidence": "system: auto-filled current date",
+                            "confidence": 1.0,
+                            "reason": "auto_date",
+                            "source": "system",
+                            "updated_at": now_ts(),
+                        }
+                elif stype in {"auto_datetime", "auto_now_datetime"}:
+                    if not isinstance(slots_state.get(slot_key), dict) or slots_state.get(slot_key, {}).get("status") != "full":
+                        slots_state[slot_key] = {
+                            "status": "full",
+                            "value": _dt.now().isoformat(timespec="seconds"),
+                            "evidence": "system: auto-filled current datetime",
+                            "confidence": 1.0,
+                            "reason": "auto_datetime",
+                            "source": "system",
+                            "updated_at": now_ts(),
+                        }
+        except Exception:
+            pass
+        #2027-05-05-zty-end
+
+        # Slot mapping must be LLM-driven and missing-slot-driven.
+        # Keyword-only candidate detection is too brittle for short answers
+        # (e.g. "蕾丝", "没有了", "1000以内") and causes repeated re-asking.
+        #
+        # We compute a bounded list of "candidate slots" from the currently
+        # missing required slots. This ensures the structured assessment always
+        # has a schema target, even when the user provides a short value that
+        # contains no keywords.
+        candidate_slots: list[str] = []
+        user_intent = "provide_info"
+        try:
+            user_intent = self._presales_classify_user_intent(user_message)
+        except Exception:
+            user_intent = "provide_info"
+
+        # If the user starts providing/correcting info while we are waiting for
+        # confirmation of the info summary, treat that as "modify" and return
+        # to info_collection so slot intake can continue.
+        try:
+            um0 = str(user_message or "").strip().lower()
+            if stage == "info_summarization":
+                if user_intent in {"provide_info", "correct"}:
+                    state["stage"] = "info_collection"
+                    stage = "info_collection"
+                    lt0 = state.get("last_turn")
+                    if not isinstance(lt0, dict):
+                        lt0 = {}
+                        state["last_turn"] = lt0
+                    lt0["stage_rollback"] = "info_summarization->info_collection"
+        except Exception:
+            pass
+
+        # Presales memory isolation is enforced in the agent loop by disabling
+        # memory-context injection when presales is active.
+
+        # If we are waiting for a conflict confirmation, resolve it before
+        # continuing normal slot assessment.
+        pending = state.get("pending_conflict", {})
+        if isinstance(pending, dict) and pending.get("slot"):
+            slot_key = str(pending.get("slot") or "").strip()
+            old_val = str(pending.get("old_value") or "").strip()
+            new_val = str(pending.get("new_value") or "").strip()
+            um = str(user_message or "").strip()
+            um_l = um.lower()
+            # IMPORTANT: When a conflict is pending, do NOT treat arbitrary
+            # numeric text as a "new value" for the conflict slot. Users often
+            # continue answering other slots (e.g. budget) and we must not
+            # hijack that number into the conflict resolution flow.
+            #
+            # If the user explicitly provides a third value, they should do so
+            # in a way that references the conflicting field or includes the
+            # new value text itself (handled below by substring checks).
+            accepted = um_l in {"是", "对", "确认", "没错", "ok", "okay", "yes", "y"}
+            rejected = um_l in {"不是", "不对", "否", "不用", "no", "n"}
+            if not accepted and not rejected:
+                if new_val and new_val in um:
+                    accepted = True
+                elif old_val and old_val in um:
+                    rejected = True
+                # "用前面那个/还是之前那个" -> reject new, keep old
+                if any(k in um for k in ("前面", "之前", "原来", "原先")) and any(k in um for k in ("用", "还是", "按")):
+                    rejected = True
+            # If the user is explicitly correcting, treat that as selecting the
+            # new value (the correction) and clear the conflict.
+            if user_intent == "correct" and not accepted and not rejected:
+                accepted = True
+            if accepted:
+                state.setdefault("slots", {})[slot_key] = {
+                    "status": "full",
+                    "value": new_val,
+                    "evidence": "user confirmed overwrite after conflict check",
+                    "confidence": 1.0,
+                    "reason": "conflict_confirmed",
+                    "source": "user",
+                    "updated_at": now_ts(),
+                }
+                state["pending_conflict"] = {}
+            elif rejected:
+                state["pending_conflict"] = {}
+            else:
+                # Stop here; the main loop will ask a confirmation question.
+                lt = state.get("last_turn")
+                if not isinstance(lt, dict):
+                    lt = {}
+                    state["last_turn"] = lt
+                lt["pending_conflict"] = pending
+                # Keep missing/coverage up to date for downstream answer gating.
+                try:
+                    missing_now = compute_missing_required(resolved_slots=rs, filled_slots=state.get("slots", {}))
+                    missing_now = sort_missing_slots(
+                        missing_now,
+                        slot_meta=rs.meta if isinstance(rs.meta, dict) else None,
+                        preferred_order=getattr(self, "_presales_template_slot_order", None),
+                    )
+                except Exception:
+                    missing_now = []
+                try:
+                    coverage_now = slot_coverage(resolved_slots=rs, filled_slots=state.get("slots", {}))
+                except Exception:
+                    coverage_now = 0.0
+                lt["missing_slots"] = missing_now
+                lt["coverage"] = coverage_now
+                lt["stage"] = stage
+                self._presales_turn_missing_slots = missing_now
+                self._presales_turn_coverage = coverage_now
+                self._presales_active_state = state
+                self._save_presales_state(state)
+                return
+
+        # Pre-compute missing slots BEFORE assessing this turn, so we can drive
+        # candidate selection from "what we still need" (not from keywords).
+        missing = compute_missing_required(resolved_slots=rs, filled_slots=state.get("slots", {}))
+        try:
+            missing = sort_missing_slots(
+                missing,
+                slot_meta=rs.meta if isinstance(rs.meta, dict) else None,
+                preferred_order=getattr(self, "_presales_template_slot_order", None),
+            )
+        except Exception:
+            pass
+        try:
+            max_missing_eval = int(self._presales_config_raw.get("max_missing_eval_per_turn", 6) or 6)
+        except Exception:
+            max_missing_eval = 6
+        if max_missing_eval < 1:
+            max_missing_eval = 1
+        missing_for_eval = missing[:max_missing_eval]
+        # Candidate slots are the ONLY slots the structured assessor is allowed
+        # to fill this turn. Prefer "asked slots" from the last agent question(s)
+        # so the model can only write what we actually asked for (strict presales
+        # intake). Fallback to missing-slot driven candidates when we did not ask
+        # a slot explicitly (e.g. user proactively provides info).
+        asked_slots: List[str] = []
+        try:
+            lt0 = state.get("last_turn", {})
+            if isinstance(lt0, dict) and isinstance(lt0.get("asked_slots"), list):
+                asked_slots = [str(x or "").strip() for x in lt0.get("asked_slots") if str(x or "").strip()]
+        except Exception:
+            asked_slots = []
+        candidate_slots = list(dict.fromkeys(asked_slots or missing_for_eval))
+
+        # If we JUST activated into info_collection, do not immediately try to
+        # "intake" slots unless the user is actually providing information.
+        # Many users trigger activation by expressing a desire for the service
+        # ("我想要专属穿搭设计") or by asking a side question ("多少钱/流程是啥"),
+        # and extracting slots from those messages causes false fills and
+        # repeated questions. In those cases we keep the flow on the normal
+        # conversation path; the answer-gate will prompt for missing info.
+        try:
+            if stage == "info_collection":
+                # user_intent was computed earlier in this function. Only run
+                # structured intake on messages that plausibly contain answers.
+                if user_intent not in {"provide_info", "correct"}:
+                    candidate_slots = []
+        except Exception:
+            pass
+
+        assessments = []
+        if candidate_slots:
+            assessments = self._presales_assess_slots(
+                user_message=user_message,
+                resolved_slots=rs,
+                candidate_slots=candidate_slots,
+            )
+        # Ensure we always attempt to merge all returned assessments. Candidate
+        # slots are used to LIMIT what the assessor is allowed to fill, but if
+        # tests/mock return values include valid extra slots, we should still
+        # accept them (the assessor has already been restricted in real runs).
+        #
+        # However, we must still enforce candidate restriction for *real* LLM
+        # responses in _presales_assess_slots(). That function already filters
+        # by candidate_slots, so here we just avoid accidentally dropping items.
+        if assessments and candidate_slots:
+            try:
+                # If upstream mistakenly filtered too aggressively, re-include
+                # any valid assessment slots here by allowing all.
+                pass
+            except Exception:
+                pass
+
+        # NOTE: No "focus-slot fallback deposit".
+        # We never write user raw text directly into slot values. Slot writes must
+        # come from structured LLM assessments so there is a single authoritative
+        # write path (prevents conflicts like "七十五公斤" vs "75").
+
+        # If the user gives a short "no more" style reply right after we asked
+        # for a specific slot, treat it as confirmation that the current slot's
+        # value is complete (i.e. no additional items). This prevents the model
+        # from re-asking the same slot (e.g. avoid_elements) after "没有了".
+        try:
+            focus = str(getattr(self, "_presales_focus_slot", "") or "").strip()
+            if focus:
+                um = str(user_message or "").strip()
+                um_l = um.lower()
+                no_more = um_l in {"没有了", "没了", "就这些", "没有", "无", "无了", "就这样", "没有其他了", "没有别的了"}
+                if no_more:
+                    entry = state.get("slots", {}).get(focus)
+                    if isinstance(entry, dict) and entry.get("status") == "full":
+                        # Keep existing value, but update evidence to reflect user confirmation.
+                        entry["evidence"] = (str(entry.get("evidence") or "") + f" | user confirmed no more: {um}").strip()[:1000]
+                        entry["confidence"] = max(0.9, float(entry.get("confidence", 0.0) or 0.0))
+                        entry["updated_at"] = now_ts()
+                        state["slots"][focus] = entry
+        except Exception:
+            pass
+        # Apply assessments with conflict/overwrite governance.
+        # If a conflict is pending, we do not apply new overwrites until the user confirms.
+        if not isinstance(state.get("pending_conflict"), dict):
+            state["pending_conflict"] = {}
+        slot_meta = rs.meta if isinstance(rs.meta, dict) else {}
+
+        pending = state.get("pending_conflict", {})
+        if isinstance(pending, dict) and pending.get("slot"):
+            # Waiting for user to confirm which value is correct.
+            pass
+        else:
+            tmp_slots = copy.deepcopy(state.get("slots", {}) if isinstance(state.get("slots"), dict) else {})
+            merge_slot_assessments(filled_slots=tmp_slots, assessments=assessments, resolved_slots=rs)
+
+            slots_state = state.get("slots", {})
+            if not isinstance(slots_state, dict):
+                slots_state = {}
+                state["slots"] = slots_state
+
+            conflicts: list[dict] = []
+            for slot_key, new_entry in tmp_slots.items():
+                if not isinstance(new_entry, dict):
+                    continue
+                new_status = str(new_entry.get("status") or "none").strip().lower()
+                if new_status not in {"full", "partial"}:
+                    continue
+                new_val = normalize_slot_value(slot_key, str(new_entry.get("value") or "").strip(), meta=slot_meta)
+                old_entry = slots_state.get(slot_key)
+                old_val = normalize_slot_value(slot_key, str(old_entry.get("value") or "").strip(), meta=slot_meta) if isinstance(old_entry, dict) else ""
+
+                if not old_val:
+                    new_entry["value"] = new_val
+                    slots_state[slot_key] = new_entry
+                    continue
+
+                # If we already have a full value, don't downgrade it to partial.
+                try:
+                    if isinstance(old_entry, dict) and str(old_entry.get("status") or "").strip().lower() == "full" and new_status == "partial":
+                        continue
+                except Exception:
+                    pass
+
+                if new_val and new_val != old_val:
+                    pol = slot_overwrite_policy(slot_key, meta=slot_meta)
+                    cpol = slot_conflict_policy(slot_key, meta=slot_meta)
+                    # Avoid false conflicts for semantically equivalent values
+                    # (e.g. paraphrases like "不要蕾丝" vs "避免蕾丝").
+                    try:
+                        if values_equivalent(slot_key, old_val, new_val, meta=slot_meta):
+                            new_entry["value"] = new_val
+                            slots_state[slot_key] = new_entry
+                            continue
+                    except Exception:
+                        pass
+                    if cpol == "ask_confirm" and pol in {"if_user_corrects", "never"} and user_intent != "correct":
+                        conflicts.append({"slot": slot_key, "old_value": old_val, "new_value": new_val})
+                        continue
+                    if pol == "never":
+                        continue
+                    # always_latest or permissive overwrite
+                    new_entry["value"] = new_val
+                    slots_state[slot_key] = new_entry
+                    continue
+
+                # Same value (or empty new value): keep the best evidence.
+                if isinstance(old_entry, dict):
+                    try:
+                        if float(new_entry.get("confidence", 0.0) or 0.0) < float(old_entry.get("confidence", 0.0) or 0.0):
+                            continue
+                    except Exception:
+                        pass
+                new_entry["value"] = new_val or old_val
+                slots_state[slot_key] = new_entry
+
+            # Only gate on one conflict at a time (aligns with one-question UX).
+            if conflicts:
+                state["pending_conflict"] = conflicts[0]
+            else:
+                state["pending_conflict"] = {}
+
+        # Recompute missing slots AFTER applying assessments + any focus-slot
+        # fallbacks, so downstream answer-gating and question selection reflects
+        # the latest session state.
+        missing = compute_missing_required(resolved_slots=rs, filled_slots=state["slots"])
+        try:
+            missing = sort_missing_slots(
+                missing,
+                slot_meta=rs.meta if isinstance(rs.meta, dict) else None,
+                preferred_order=getattr(self, "_presales_template_slot_order", None),
+            )
+        except Exception:
+            pass
+        coverage = slot_coverage(resolved_slots=rs, filled_slots=state["slots"])
+        prev_lt = state.get("last_turn") if isinstance(state.get("last_turn"), dict) else {}
+        asked_slots_prev = prev_lt.get("asked_slots") if isinstance(prev_lt.get("asked_slots"), list) else []
+        state["last_turn"] = {
+            "slot_candidates": candidate_slots,
+            "slot_assessment_count": len(assessments),
+            "missing_slots": missing,
+            "coverage": coverage,
+            "retrieved": False,
+            "retrieval_success": False,
+            "cache_hit": False,
+            "clarify": False,
+            "user_intent": user_intent,
+            # Persist the last asked slot(s) so the *next* turn can limit
+            # structured extraction to only what we actually asked for.
+            "asked_slots": [str(x or "").strip() for x in asked_slots_prev if str(x or "").strip()],
+            "updated_at": now_ts(),
+        }
+        self._presales_turn_missing_slots = missing
+        self._presales_turn_coverage = coverage
+
+        # If we are still missing required info in info_collection, the next
+        # assistant response should present the numbered list of questions.
+        try:
+            if stage == "info_collection" and missing:
+                lt2 = state.get("last_turn")
+                if not isinstance(lt2, dict):
+                    lt2 = {}
+                    state["last_turn"] = lt2
+                lt2["next_action"] = "ask_missing_slots"
+        except Exception:
+            pass
+
+        self._presales_active_state = state
+        self._save_presales_state(state)
+
+    def _presales_cached_context_for_query(self, query: str) -> str:
+        if not self._presales_runtime.enabled:
+            return ""
+        state = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+        cache = state.get("rag_cache")
+        if not isinstance(cache, dict):
+            return ""
+        qh = query_hash(query)
+        if not qh:
+            return ""
+        entry = cache.get(qh)
+        if not isinstance(entry, dict):
+            return ""
+        ts = entry.get("ts")
+        payload = entry.get("payload")
+        if not isinstance(ts, (int, float)) or not isinstance(payload, dict):
+            return ""
+        if self._presales_runtime.rag_dedupe_ttl_seconds > 0:
+            if (now_ts() - float(ts)) > self._presales_runtime.rag_dedupe_ttl_seconds:
+                return ""
+
+        state["last_turn"]["cache_hit"] = True
+        state["last_turn"]["retrieved"] = True
+        state["last_turn"]["retrieval_success"] = bool(payload.get("success"))
+        metrics = state.get("metrics", {})
+        if isinstance(metrics, dict):
+            metrics["cache_hit"] = int(metrics.get("cache_hit", 0)) + 1
+        self._presales_active_state = state
+        self._save_presales_state(state)
+
+        self._presales_turn_rag_calls = self._presales_runtime.rag_max_calls_per_turn
+        self._presales_turn_rag_attempted = True
+        self._presales_turn_rag_success = bool(payload.get("success"))
+        return build_rag_cache_context(
+            payload,
+            max_sources=self._presales_runtime.max_visible_sources,
+            show_doc_names=self._presales_runtime.show_source_doc_names,
+        )
+
+    def _presales_stage_guidance(self, user_message: str) -> str:
+        """Per-turn stage guidance injected into the current user message.
+
+        We intentionally inject this as ephemeral user-message context rather
+        than mutating the cached system prompt (preserves prompt caching).
+        """
+        if not self._presales_runtime.enabled:
+            return ""
+        state = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+        if not bool(state.get("in_flow", False)):
+            return ""
+        stage = str(state.get("stage") or "info_collection").strip() or "info_collection"
+        missing = list(self._presales_turn_missing_slots or [])
+
+        # Rough detection of "side questions" that should be answered even
+        # during info collection (time/weather/how-to/etc).
+        um = str(user_message or "").strip()
+        um_l = um.lower()
+        is_side_question = (
+            "几点" in um
+            or "时间" in um
+            or "天气" in um
+            or um.endswith("?")
+            or um.endswith("？")
+        )
+
+        lines: list[str] = [
+            "<presales-stage-guidance>",
+            f"stage: {stage}",
+        ]
+
+        if stage == "info_collection":
+            lines += [
+                "你正在信息采集阶段：目标是补齐缺失槽位，优先提问获取信息。",
+                "除非用户明确要求立即给方案/建议，否则不要输出长篇方案、报价表、BMI计算、尺码推断等内容。",
+                "如果用户提出旁路问题（如时间/天气/解释），先简短回答，再继续提问补齐信息。",
+                f"missing_slots: {missing}",
+            ]
+            if missing and not is_side_question:
+                lines.append("本轮输出应以提问为主（可一次问多个关键点），不要展开方案内容。")
+        elif stage == "info_summarization":
+            lines += [
+                "你正在信息整理阶段：输出结构化信息整理摘要，等待用户自然语言确认。",
+                "不要生成最终方案或报价，除非用户明确要求提前看草案。",
+            ]
+        elif stage == "proposal":
+            lines += [
+                "你正在方案阶段：根据模板输出方案（必要时使用RAG填充{{rag}}条目）。",
+                "不要追问大量槽位；如果关键槽位缺失，最多补问少量关键点再生成方案。",
+                "方案输出后即完成流程，等待用户自然语言确认或调整。",
+            ]
+        else:
+            lines.append("遵循当前阶段目标输出。")
+
+        lines.append("</presales-stage-guidance>")
+        return "\n".join(lines)
+
+    #2027-05-06-zty-start
+    def _presales_detect_side_question(self, user_message: str) -> bool:
+        """Detect whether the user is asking a side question during info_collection.
+
+        Side questions should be answered first, then we resume slot collection.
+        Keep this heuristic conservative to avoid skipping normal slot deposits.
+        """
+        um = str(user_message or "").strip()
+        if not um:
+            return False
+        # If it contains an explicit question mark, treat as a question.
+        if um.endswith("?") or um.endswith("？") or "？" in um or "?" in um:
+            return True
+        # Common presales side questions.
+        kws = (
+            "怎么收费",
+            "收费",
+            "报价",
+            "价格",
+            "多少钱",
+            "多久",
+            "周期",
+            "流程",
+            "怎么做",
+            "能不能",
+            "是否可以",
+            "隐私",
+            "数据",
+            "保密",
+            "案例",
+            "样例",
+            "效果",
+            "可以退",
+            "退款",
+            "合同",
+        )
+        lower = um.lower()
+        return any(kw in um or kw in lower for kw in kws)
+
+    #2027-05-06-zty-start
+    def _presales_classify_user_intent(self, user_message: str) -> str:
+        """Classify the user's intent for robust routing in info_collection.
+
+        Returns one of:
+          - "provide_info": user is providing facts/answers for slots
+          - "ask_question": user is asking a question (side question)
+          - "correct": user is correcting a previous value
+          - "confirm": user is confirming/approving
+          - "other"
+        """
+        text = str(user_message or "").strip()
+        if not text:
+            return "other"
+
+        # Fast heuristic: explicit question marks or question keywords.
+        if "?" in text or "？" in text:
+            return "ask_question"
+
+        low = text.lower()
+        if any(k in low for k in ("不对", "纠正", "更正", "改成", "其实是", "应该是")):
+            return "correct"
+        if low in {"确认", "没问题", "可以", "好的", "行", "ok", "okay", "yes", "y"}:
+            return "confirm"
+        if any(k in low for k in ("确认无误", "信息正确", "都正确", "没有问题", "没问题了", "无误", "准确")):
+            return "confirm"
+
+        # LLM classifier (bounded) for ambiguous cases.
+        try:
+            if not bool(getattr(self._presales_runtime, "user_intent_classifier_enabled", True)):
+                return "provide_info"
+            if self.api_mode != "chat_completions":
+                return "provide_info"
+            sys = (
+                "你是售前对话的意图分类器。只输出JSON，不要输出解释。\n"
+                "可选intent: provide_info, ask_question, correct, confirm, other"
+            )
+            user = (
+                f"用户本轮输入：{text[:800]}\n\n"
+                "输出格式：{\"intent\":\"provide_info|ask_question|correct|confirm|other\"}"
+            )
+            kwargs: Dict[str, Any] = {"model": self.model, "messages": [{"role": "system", "content": sys}, {"role": "user", "content": user}]}
+            try:
+                kwargs.update(self._max_tokens_param(self._presales_runtime.user_intent_classifier_max_tokens))
+            except Exception:
+                kwargs["max_tokens"] = self._presales_runtime.user_intent_classifier_max_tokens
+            resp = self._interruptible_api_call(kwargs)
+            content = self._presales_response_text(resp)
+            txt = str(content or "").strip()
+            if txt.startswith("```"):
+                txt = re.sub(r"^```(?:json)?\\s*", "", txt)
+                txt = re.sub(r"\\s*```$", "", txt)
+            data = json.loads(txt) if txt else {}
+            if isinstance(data, dict):
+                intent = str(data.get("intent") or "").strip()
+                if intent in {"provide_info", "ask_question", "correct", "confirm", "other"}:
+                    return intent
+        except Exception:
+            pass
+        return "provide_info"
+    #2027-05-06-zty-end
+
+    #2027-05-06-zty-start
+    def _presales_generate_next_slot_question(
+        self,
+        *,
+        missing_slots: List[str],
+        resolved_slots: ResolvedSlots,
+        slots_state: Dict[str, Any],
+        template_slot_labels: Dict[str, str] | None,
+        user_tail: List[str] | None = None,
+    ) -> str:
+        """Generate ONE natural question for the next missing slot.
+
+        Hard constraints:
+        - Output must be exactly one question sentence (no lists).
+        - Must ask for the target slot only (no multi-slot questions).
+        - Should be answerable directly (ideally include a brief example).
+        - If generation fails, fallback to a simple template-label question.
+        """
+        missing = [str(s or "").strip() for s in (missing_slots or []) if str(s or "").strip()]
+        if not missing:
+            return ""
+        target = missing[0]
+        # Record the current focus slot so short replies like "没有了/就这些"
+        # can be treated as confirmation of the last asked field.
+        try:
+            self._presales_focus_slot = target
+        except Exception:
+            pass
+        # Record the slot(s) we asked for on this turn so the next structured
+        # assessment can be strictly limited to just these fields.
+        try:
+            st = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+            lt = st.get("last_turn")
+            if not isinstance(lt, dict):
+                lt = {}
+                st["last_turn"] = lt
+            lt["asked_slots"] = [target]
+            self._presales_active_state = st
+        except Exception:
+            pass
+        label = ""
+        if template_slot_labels and isinstance(template_slot_labels, dict):
+            label = str(template_slot_labels.get(target) or "").strip()
+        if not label:
+            meta = resolved_slots.meta.get(target, {}) if isinstance(resolved_slots.meta, dict) else {}
+            label = str(meta.get("label") or "").strip()
+        if not label:
+            label = target
+
+        # Fallback question (deterministic).
+        fallback = f"请问你的{label}是？"
+
+        if not bool(getattr(self._presales_runtime, "question_generator_enabled", True)):
+            return fallback
+        if self.api_mode != "chat_completions":
+            return fallback
+
+        # Provide minimal context: confirmed slots + recent user tail.
+        compact = {}
+        if isinstance(slots_state, dict):
+            for k, v in slots_state.items():
+                if not isinstance(v, dict) or v.get("status") != "full":
+                    continue
+                compact[k] = v.get("value")
+        tail = "\n".join([str(x) for x in (user_tail or []) if str(x).strip()][-6:])
+
+        sys = (
+            "你是专业售前客服，正在做信息采集。"
+            "你需要针对指定字段生成【一句话】追问。"
+            "严格规则：只输出一句问句；不要输出列表、不要输出解释、不要输出方案建议。"
+            "问题要让用户可以直接回答，并尽量给一个很短的示例格式。"
+        )
+        user = (
+            f"目标字段：{target}\n"
+            f"字段中文名：{label}\n\n"
+            f"已确认信息（JSON）：{json.dumps(compact, ensure_ascii=False)[:1200]}\n\n"
+            f"最近对话（用户侧，供语气参考）：\n{tail}\n\n"
+            "请输出一句问句，只问这个字段。"
+        )
+        kwargs: Dict[str, Any] = {"model": self.model, "messages": [{"role": "system", "content": sys}, {"role": "user", "content": user}]}
+        try:
+            kwargs.update(self._max_tokens_param(self._presales_runtime.question_generator_max_tokens))
+        except Exception:
+            kwargs["max_tokens"] = self._presales_runtime.question_generator_max_tokens
+        try:
+            resp = self._interruptible_api_call(kwargs)
+            q = str(self._presales_response_text(resp) or "").strip()
+            # Enforce "single question" output.
+            q = q.splitlines()[0].strip()
+            # Must contain a question mark or end with a Chinese question particle.
+            if len(q) > 220:
+                q = q[:220].rstrip()
+            if "？" not in q and "?" not in q and not q.endswith(("吗", "呢")):
+                # If model failed constraint, fallback.
+                return fallback
+            return q
+        except Exception:
+            return fallback
+    #2027-05-06-zty-end
+
+    #2027-05-07-zty-start
+    def _presales_generate_missing_slot_questions_block(
+        self,
+        *,
+        missing_slots: List[str],
+        resolved_slots: ResolvedSlots,
+        slots_state: Dict[str, Any],
+        template_slot_labels: Dict[str, str] | None,
+        user_tail: List[str] | None = None,
+        max_questions: int = 3,
+    ) -> str:
+        """Ask up to N missing-slot questions in template order.
+
+        This is used when single-question enforcement is disabled. We keep
+        generation deterministic by asking slots in missing_slots order and
+        generating one question per slot (with per-question LLM prompt bounded
+        by question_generator_max_tokens).
+        """
+        try:
+            n = int(max_questions)
+        except Exception:
+            n = 1
+        n = max(1, min(8, n))
+        missing = [str(s or "").strip() for s in (missing_slots or []) if str(s or "").strip()]
+        if not missing:
+            return ""
+        qs: List[str] = []
+        for slot in missing[:n]:
+            q = self._presales_generate_next_slot_question(
+                missing_slots=[slot],
+                resolved_slots=resolved_slots,
+                slots_state=slots_state,
+                template_slot_labels=template_slot_labels,
+                user_tail=user_tail,
+            )
+            if q:
+                qs.append(q.strip())
+        if not qs:
+            return ""
+        # Record all slots asked in this block so the next structured assessment
+        # can be strictly limited to just these fields.
+        try:
+            st = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+            lt = st.get("last_turn")
+            if not isinstance(lt, dict):
+                lt = {}
+                st["last_turn"] = lt
+            lt["asked_slots"] = [str(s or "").strip() for s in missing[:n] if str(s or "").strip()]
+            self._presales_active_state = st
+        except Exception:
+            pass
+        if len(qs) == 1:
+            return qs[0]
+        lines = ["为了把方案信息一次性对齐，我需要再确认："]
+        for i, q in enumerate(qs, start=1):
+            lines.append(f"{i}. {q}")
+        return "\n".join(lines).strip()
+    #2027-05-07-zty-end
+
+    #2027-05-06-zty-end
+
+    def _presales_record_rag_payload(self, question: str, payload: Dict[str, Any]) -> None:
+        if not self._presales_runtime.enabled or not isinstance(payload, dict):
+            return
+        state = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+        if not isinstance(state.get("rag_cache"), dict):
+            state["rag_cache"] = {}
+        qh = query_hash(question)
+        if qh:
+            state["rag_cache"][qh] = {"ts": now_ts(), "payload": payload}
+
+        lt = state.get("last_turn")
+        if not isinstance(lt, dict):
+            lt = {}
+            state["last_turn"] = lt
+        lt["retrieved"] = True
+        lt["retrieval_success"] = bool(payload.get("success"))
+
+        metrics = state.get("metrics", {})
+        if isinstance(metrics, dict):
+            metrics["retrieved"] = int(metrics.get("retrieved", 0)) + 1
+
+        self._presales_turn_rag_attempted = True
+        self._presales_turn_rag_success = bool(payload.get("success"))
+        self._presales_active_state = state
+        self._save_presales_state(state)
+
+    def _presales_maybe_short_circuit_rag(self, function_name: str, function_args: Dict[str, Any]) -> Optional[str]:
+        if not self._presales_runtime.enabled:
+            return None
+        if function_name != "ragflow_completion":
+            return None
+        if not self._presales_runtime.single_retrieval_mode:
+            return None
+        if self._presales_turn_rag_calls >= self._presales_runtime.rag_max_calls_per_turn:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "RAG query skipped: per-turn retrieval limit reached.",
+                    "mode": "presales_turn_limit",
+                },
+                ensure_ascii=False,
+            )
+        self._presales_turn_rag_calls += 1
+        self._presales_turn_rag_attempted = True
+        return None
+
+    def _presales_apply_answer_gate(self, final_response: str) -> str:
+        if not self._presales_runtime.enabled:
+            return final_response
+        state = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+        missing = list(self._presales_turn_missing_slots or [])
+
+        #2027-05-05-zty-start
+        # Resolve slots + meta for this session so answer gate can generate
+        # clarify questions from config-driven descriptions.
+        rs_dict0 = state.get("resolved_slots", {}) if isinstance(state.get("resolved_slots"), dict) else {}
+        rs_meta0 = state.get("resolved_slots_meta", {}) if isinstance(state.get("resolved_slots_meta"), dict) else {}
+        rs_for_gate = ResolvedSlots(
+            required_base=list(rs_dict0.get("required_base") or []),
+            required_for_handoff=list(rs_dict0.get("required_for_handoff") or []),
+            optional=list(rs_dict0.get("optional") or []),
+            meta=rs_meta0,
+        )
+        # Inject template-derived labels into meta for question generation.
+        try:
+            if isinstance(rs_for_gate.meta, dict):
+                rs_for_gate.meta["__template_labels__"] = getattr(self, "_presales_template_slot_labels", {}) or {}
+        except Exception:
+            pass
+        #2027-05-05-zty-end
+
+        #2027-05-04-zty-start
+        # Consume any pending confirm event stored in SessionDB meta. We still
+        # support slash-command confirmations, but natural-language confirmation
+        # is now the primary path.
+        confirm_event = ""
+        try:
+            if self._session_db:
+                persisted = load_presales_state(self._session_db, session_id=self.session_id or "")
+                confirm_event = str(persisted.get("confirm_event") or "").strip()
+                if confirm_event:
+                    # Clear it so one confirmation advances at most one step.
+                    persisted["confirm_event"] = ""
+                    lt_p = persisted.get("last_turn")
+                    if isinstance(lt_p, dict):
+                        lt_p["confirm_event"] = confirm_event
+                    save_presales_state(self._session_db, session_id=self.session_id or "", state=persisted)
+        except Exception:
+            confirm_event = ""
+        try:
+            lt0 = state.get("last_turn") if isinstance(state.get("last_turn"), dict) else {}
+            intent_now = str(lt0.get("user_intent") or "").strip().lower()
+        except Exception:
+            intent_now = ""
+        stage_now0 = str(state.get("stage") or "info_collection").strip().lower()
+        if not confirm_event and stage_now0 == "info_summarization" and intent_now == "confirm":
+            confirm_event = "info_summary"
+        #2027-05-04-zty-end
+
+        decision = evaluate_answer_gate(
+            AnswerGateInput(
+                final_response=final_response,
+                missing_slots=missing,
+                slot_coverage=float(self._presales_turn_coverage or 0.0),
+                rag_attempted=self._presales_turn_rag_attempted,
+                rag_success=self._presales_turn_rag_success,
+                #2027-05-05-zty-start
+                slot_meta=rs_for_gate.meta if isinstance(rs_for_gate.meta, dict) else None,
+                #2027-05-05-zty-end
+            ),
+            config=AnswerGateConfig(
+                enabled=self._presales_runtime.answer_gate_enabled,
+                high_slot_coverage=self._presales_runtime.high_slot_coverage,
+                medium_slot_coverage=self._presales_runtime.medium_slot_coverage,
+                rag_failure_mode=self._presales_runtime.rag_failure_mode,
+                max_clarify_questions_per_turn=self._presales_runtime.max_clarify_questions_per_turn,
+            ),
+        )
+        lt = state.get("last_turn")
+        if not isinstance(lt, dict):
+            lt = {}
+            state["last_turn"] = lt
+        lt["answer_gate"] = {
+            "confidence": decision.confidence,
+            "action": decision.action,
+            "reason": decision.reason,
+            "clarify_question": decision.clarify_question,
+        }
+        lt["clarify"] = decision.action in {"clarify", "answer_with_clarify"}
+
+        # Hard align to the simplified flowchart:
+        # - If the business state says the next action is "ask missing slots",
+        #   always output the numbered question list (unless a pending conflict
+        #   is being resolved). This removes extra business-layer behaviors
+        #   (output referee / side-question router) from controlling the turn.
+        try:
+            next_action = str(lt.get("next_action") or "").strip().lower()
+            stage_now = str(state.get("stage") or "info_collection").strip() or "info_collection"
+            pending = state.get("pending_conflict", {})
+            if stage_now == "info_collection" and next_action == "ask_missing_slots":
+                if not (isinstance(pending, dict) and pending.get("slot")):
+                    # Only ask missing-slot questions when the current turn is
+                    # actually a presales intake interaction. For general Q&A
+                    # (e.g. "what is refund policy?"), we should answer normally
+                    # and NOT force the intake questionnaire.
+                    try:
+                        intent_now = str(lt.get("user_intent") or "").strip()
+                    except Exception:
+                        intent_now = ""
+                    if intent_now == "ask_question":
+                        raise RuntimeError("skip_intake_questions_for_side_question")
+
+                    missing_slots = list(self._presales_turn_missing_slots or [])
+                    if missing_slots:
+                        block = self._presales_generate_missing_slot_questions_block(
+                            missing_slots=missing_slots,
+                            resolved_slots=rs_for_gate,
+                            slots_state=state.get("slots", {}) if isinstance(state.get("slots"), dict) else {},
+                            template_slot_labels=getattr(self, "_presales_template_slot_labels", None),
+                            user_tail=state.get("user_tail") if isinstance(state.get("user_tail"), list) else None,
+                            max_questions=len(missing_slots),
+                        )
+                        if block:
+                            decision = AnswerGateDecision(
+                                final_response=block.strip(),
+                                confidence=decision.confidence,
+                                action="clarify",
+                                clarify_question=block.strip(),
+                                reason="flow_next_action_ask_missing_slots",
+                            )
+                            lt["next_action"] = ""  # consumed
+        except Exception:
+            pass
+
+        # Pending conflict has higher priority than all other behaviors.
+        # Force a single confirmation question so the user can resolve the
+        # mismatch and we can proceed deterministically.
+        try:
+            pending = state.get("pending_conflict", {})
+            if isinstance(pending, dict) and pending.get("slot"):
+                slot_key = str(pending.get("slot") or "").strip()
+                # Normalize pending values before prompting. If normalization
+                # shows the values are effectively the same (e.g. "七十五公斤" vs "75"),
+                # auto-resolve and avoid re-asking.
+                slot_meta_map = rs_for_gate.meta if isinstance(rs_for_gate.meta, dict) else {}
+                old_val_raw = str(pending.get("old_value") or "").strip()
+                new_val_raw = str(pending.get("new_value") or "").strip()
+                old_val = normalize_slot_value(slot_key, old_val_raw, meta=slot_meta_map)
+                new_val = normalize_slot_value(slot_key, new_val_raw, meta=slot_meta_map)
+                try:
+                    if old_val and new_val and values_equivalent(slot_key, old_val, new_val, meta=slot_meta_map):
+                        # Keep the latest normalized value and clear the conflict.
+                        entry = state.get("slots", {}).get(slot_key)
+                        if isinstance(entry, dict):
+                            entry["value"] = new_val
+                            entry["updated_at"] = now_ts()
+                            state["slots"][slot_key] = entry
+                        state["pending_conflict"] = {}
+                        pending = {}
+                except Exception:
+                    pass
+                if not (isinstance(pending, dict) and pending.get("slot")):
+                    # Conflict auto-resolved after normalization; return without
+                    # overriding the current answer-gate decision.
+                    return decision.final_response
+                label = ""
+                try:
+                    meta_map = slot_meta_map
+                    m = meta_map.get(slot_key) if isinstance(meta_map.get(slot_key), dict) else {}
+                    label = str(m.get("label") or "").strip()
+                except Exception:
+                    label = ""
+                slot_display = f"`{label}`" if label else f"`{slot_key}`"
+                question = (
+                    f"我注意到 {slot_display} 的信息前后不一致：你刚刚说是 `{new_val}`，"
+                    f"但之前你提到 `{old_val}`。以哪个为准？"
+                )
+                decision = AnswerGateDecision(
+                    final_response=question,
+                    confidence="low",
+                    action="clarify",
+                    clarify_question=question,
+                    reason="pending_conflict_confirmation",
+                )
+                lt.setdefault("referee", {})["pending_conflict_prompted"] = True
+        except Exception:
+            pass
+
+        # If we modified `decision` above, ensure `lt["answer_gate"]` reflects it.
+        try:
+            lt["answer_gate"] = {
+                "confidence": decision.confidence,
+                "action": decision.action,
+                "reason": decision.reason,
+                "clarify_question": decision.clarify_question,
+            }
+            lt["clarify"] = decision.action in {"clarify", "answer_with_clarify"}
+        except Exception:
+            pass
+
+        #2027-05-05-zty-start
+        # Discovery stage removed in simplified flowchart; do not inject
+        # discovery intros here.
+        #2027-05-05-zty-end
+
+        #2027-05-04-zty-start
+        # Stage-driven actions:
+        # - When required slots are full, move to info_summarization and emit a summary.
+        # - After confirming summary, generate proposal and mark proposal_sent so state machine advances.
+        # - After confirming proposal, persist a handoff payload.
+        #
+        # These actions are deterministic and derived from slot state, not RAG.
+        stage = str(state.get("stage") or "info_collection").strip() or "info_collection"
+        rs_dict = state.get("resolved_slots", {}) if isinstance(state.get("resolved_slots"), dict) else {}
+        rs_meta = state.get("resolved_slots_meta", {}) if isinstance(state.get("resolved_slots_meta"), dict) else {}
+        rs = ResolvedSlots(
+            required_base=list(rs_dict.get("required_base") or []),
+            required_for_handoff=list(rs_dict.get("required_for_handoff") or []),
+            optional=list(rs_dict.get("optional") or []),
+            meta=rs_meta,
+        )
+
+        # info_summarization: build summary once slots are complete.
+        if stage == "info_summarization":
+            summary = build_presales_summary(
+                slots_state=state.get("slots", {}) if isinstance(state.get("slots"), dict) else {},
+                resolved_slots=rs,
+                missing_required=missing,
+            )
+            state["summary"] = summary.data
+            lt["summary_generated"] = True
+            if not missing:
+                # Show summary to the user and wait for natural language confirmation.
+                decision = AnswerGateDecision(
+                    final_response=summary.markdown,
+                    confidence=decision.confidence,
+                    action=decision.action,
+                    clarify_question=decision.clarify_question,
+                    reason="stage_info_summarization",
+                )
+
+        # proposal: generate proposal after summary confirmed.
+        if stage == "proposal":
+            summary_data = state.get("summary") if isinstance(state.get("summary"), dict) else {}
+            proposal = self._presales_render_proposal_from_template(
+                summary_data=summary_data,
+                template_markdown=getattr(self, "_presales_proposal_template_md", "") or "",
+                task_id=getattr(self, "_current_task_id", "") or "",
+            )
+            state["proposal"] = proposal.data
+            lt["proposal_generated"] = True
+            state["proposal_sent"] = True
+            state["in_flow"] = False
+            lt["flow_completed"] = True
+            decision = AnswerGateDecision(
+                final_response=proposal.markdown,
+                confidence=decision.confidence,
+                action=decision.action,
+                clarify_question=decision.clarify_question,
+                reason="stage_proposal",
+            )
+
+        #2027-05-04-zty-end
+
+        if self._presales_runtime.state_machine_enabled:
+            stage_transition = advance_presales_stage(
+                PresalesStageInput(
+                    #2027-05-04-zty-start
+                    current_stage=str(state.get("stage") or "info_collection"),
+                    missing_required=missing,
+                    slot_coverage=float(self._presales_turn_coverage or 0.0),
+                    answer_gate_action=decision.action,
+                    final_response=decision.final_response,
+                    confirm_event=confirm_event,
+                    proposal_sent=bool(state.get("proposal_sent", False)),
+                    activated=bool(state.get("in_flow", False)),
+                    #2027-05-04-zty-end
+                )
+            )
+            state["stage"] = stage_transition.stage
+            lt["stage_transition"] = {
+                "previous_stage": stage_transition.previous_stage,
+                "stage": stage_transition.stage,
+                "changed": stage_transition.changed,
+                "reason": stage_transition.reason,
+            }
+
+        #2027-05-04-zty-start
+        # When we enter info_summarization, immediately generate the summary response
+        # (same turn) so the user sees it without needing an extra prompt.
+        if lt.get("stage_transition", {}).get("changed") and state.get("stage") == "info_summarization":
+            summary = build_presales_summary(
+                slots_state=state.get("slots", {}) if isinstance(state.get("slots"), dict) else {},
+                resolved_slots=rs,
+                missing_required=missing,
+            )
+            state["summary"] = summary.data
+            lt["summary_generated"] = True
+            decision = AnswerGateDecision(
+                final_response=summary.markdown,
+                confidence=decision.confidence,
+                action=decision.action,
+                clarify_question=decision.clarify_question,
+                reason="enter_info_summarization",
+            )
+        # When we enter proposal, generate and send proposal immediately.
+        if lt.get("stage_transition", {}).get("changed") and state.get("stage") == "proposal":
+            summary_data = state.get("summary") if isinstance(state.get("summary"), dict) else {}
+            proposal = self._presales_render_proposal_from_template(
+                summary_data=summary_data,
+                template_markdown=getattr(self, "_presales_proposal_template_md", "") or "",
+                task_id=getattr(self, "_current_task_id", "") or "",
+            )
+            state["proposal"] = proposal.data
+            state["proposal_sent"] = True
+            lt["proposal_generated"] = True
+            state["in_flow"] = False
+            lt["flow_completed"] = True
+            # Persist the generated proposal to disk for audit/debug/review.
+            try:
+                from hermes_constants import get_hermes_home
+                hermes_home = str(get_hermes_home())
+                out_path = _presales_default_proposal_output_path(
+                    session_id=self.session_id or "default",
+                    hermes_home=hermes_home,
+                )
+                if out_path:
+                    p = Path(out_path)
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(str(proposal.markdown or "").strip() + "\n", encoding="utf-8")
+                    lt["proposal_written_path"] = out_path
+            except Exception as e:
+                lt["proposal_write_error"] = str(e)[:300]
+            decision = AnswerGateDecision(
+                final_response=proposal.markdown,
+                confidence=decision.confidence,
+                action=decision.action,
+                clarify_question=decision.clarify_question,
+                reason="enter_proposal",
+            )
+
+        metrics = state.get("metrics", {})
+        if isinstance(metrics, dict) and decision.action in {"clarify", "answer_with_clarify"}:
+            metrics["clarify"] = int(metrics.get("clarify", 0)) + 1
+        self._presales_active_state = state
+        self._save_presales_state(state)
+        return decision.final_response
+
+    #2027-05-05-zty-start
+    def _presales_render_proposal_from_template(
+        self,
+        *,
+        summary_data: Dict[str, Any],
+        template_markdown: str,
+        task_id: str,
+    ):
+        """Render proposal template with sys/slot/rag placeholders.
+
+        We fill:
+        - slot/sys placeholders deterministically
+        - rag placeholders via KB retrieval (bounded per turn)
+        - ai placeholders via model generation (bounded per turn), with payload-less
+          {{ai}} auto intent derived from the line prefix (like {{rag}}).
+
+        ext placeholders remain blank by default.
+        """
+        tmpl = str(template_markdown or "").strip()
+        # Support both {{rag:...}}/{{ai:...}} and payload-less {{rag}}/{{ai}}
+        # (auto intent derived from line context).
+        instances = extract_template_placeholder_instances(tmpl) if tmpl else []
+        rag_intents: list[str] = []
+        ai_intents: list[str] = []
+        for inst in instances:
+            if isinstance(inst, dict) and inst.get("kind") == "rag":
+                payload = str(inst.get("payload") or "").strip()
+                line = str(inst.get("line") or "").strip()
+                if payload:
+                    rag_intents.append(payload)
+                else:
+                    prefix = line.split("{{", 1)[0].strip()
+                    # Keep normalization in sync with agent.presales_proposal._normalize_auto_intent.
+                    if "=" in prefix:
+                        prefix = prefix.rsplit("=", 1)[-1].strip()
+                    if "|" in prefix:
+                        cells = [c.strip() for c in prefix.split("|") if c.strip()]
+                        if cells:
+                            prefix = cells[-1]
+                    prefix = re.sub(r"^\s*#{1,6}\s*", "", prefix)
+                    prefix = re.sub(r"^\s*>\s*", "", prefix)
+                    prefix = re.sub(r"^\s*[-*+]\s*", "", prefix)
+                    prefix = re.sub(r"^\s*\d+\s*[\.\)、\)]\s*", "", prefix)
+                    prefix = prefix.strip().rstrip(":：").strip()
+                    for _ in range(2):
+                        if (prefix.startswith("**") and prefix.endswith("**")) or (
+                            prefix.startswith("__") and prefix.endswith("__")
+                        ):
+                            prefix = prefix[2:-2].strip()
+                        elif (prefix.startswith("*") and prefix.endswith("*")) or (
+                            prefix.startswith("_") and prefix.endswith("_")
+                        ):
+                            prefix = prefix[1:-1].strip()
+                        elif prefix.startswith("`") and prefix.endswith("`"):
+                            prefix = prefix[1:-1].strip()
+                    rag_intents.append(prefix or "知识库检索")
+
+            if isinstance(inst, dict) and inst.get("kind") == "ai":
+                payload = str(inst.get("payload") or "").strip()
+                line = str(inst.get("line") or "").strip()
+                if payload:
+                    ai_intents.append(payload)
+                else:
+                    prefix = line.split("{{", 1)[0].strip()
+                    # Keep normalization in sync with agent.presales_proposal._normalize_auto_intent.
+                    if "=" in prefix:
+                        prefix = prefix.rsplit("=", 1)[-1].strip()
+                    if "|" in prefix:
+                        cells = [c.strip() for c in prefix.split("|") if c.strip()]
+                        if cells:
+                            prefix = cells[-1]
+                    prefix = re.sub(r"^\s*#{1,6}\s*", "", prefix)
+                    prefix = re.sub(r"^\s*>\s*", "", prefix)
+                    prefix = re.sub(r"^\s*[-*+]\s*", "", prefix)
+                    prefix = re.sub(r"^\s*\d+\s*[\.\、\)]\s*", "", prefix)
+                    prefix = prefix.strip().rstrip(":：").strip()
+                    for _ in range(2):
+                        if (prefix.startswith("**") and prefix.endswith("**")) or (
+                            prefix.startswith("__") and prefix.endswith("__")
+                        ):
+                            prefix = prefix[2:-2].strip()
+                        elif (prefix.startswith("*") and prefix.endswith("*")) or (
+                            prefix.startswith("_") and prefix.endswith("_")
+                        ):
+                            prefix = prefix[1:-1].strip()
+                        elif prefix.startswith("`") and prefix.endswith("`"):
+                            prefix = prefix[1:-1].strip()
+                    ai_intents.append(prefix or "内容生成")
+        rag_intents = list(dict.fromkeys(rag_intents))
+        ai_intents = list(dict.fromkeys(ai_intents))
+
+        rag_values: Dict[str, str] = {}
+        # Fill multiple RAG placeholders in one shot during proposal rendering.
+        # This is separate from the normal per-turn single-retrieval guard used
+        # during conversation Q&A.
+        max_calls = max(1, int(getattr(self._presales_runtime, "template_rag_max_calls_per_turn", 1) or 1))
+        for intent in rag_intents[:max_calls]:
+            planned_query = intent
+            if self._presales_runtime.template_rag_query_planner_enabled:
+                planned_query = (
+                    self._presales_plan_template_rag_query(
+                        intent=intent,
+                        summary_data=summary_data,
+                        template_markdown=tmpl,
+                        task_id=task_id,
+                    )
+                    or intent
+                )
+
+            ctx, ok = self._run_ragflow_hybrid_lookup(query=planned_query, task_id=task_id, source="template")
+            if ok and ctx:
+                # Map to the original placeholder payload so render_template can fill it.
+                rag_values[intent] = ctx
+            else:
+                empty_render = str(getattr(self._presales_runtime, "template_rag_empty_render", "") or "")
+                if empty_render:
+                    if empty_render == "(not_found)":
+                        rag_values[intent] = "（未检索到）"
+                    elif empty_render == "(pending)":
+                        rag_values[intent] = "（待补充）"
+                    else:
+                        rag_values[intent] = empty_render
+
+        ai_values: Dict[str, str] = {}
+        max_ai_calls = max(1, int(getattr(self._presales_runtime, "template_ai_max_calls_per_turn", 1) or 1))
+        for intent in ai_intents[:max_ai_calls]:
+            block = self._presales_generate_template_ai_block(
+                intent=intent,
+                summary_data=summary_data,
+                template_markdown=tmpl,
+                task_id=task_id,
+            )
+            if block:
+                ai_values[intent] = block
+
+        # sys placeholders are filled by presales_proposal defaults (date/datetime/session_id).
+        return build_proposal(
+            summary_data=summary_data,
+            quote_context="",
+            template_markdown=tmpl,
+            session_id=self.session_id or "",
+            rag_values=rag_values,
+            ai_values=ai_values,
+        )
+    #2027-05-05-zty-end
+
+    #2027-05-05-zty-start
+    def _presales_plan_template_rag_query(
+        self,
+        *,
+        intent: str,
+        summary_data: Dict[str, Any],
+        template_markdown: str,
+        task_id: str,
+    ) -> str:
+        """Plan a concrete RAG query from a template rag placeholder payload.
+
+        The template placeholder (intent) is often a *category* like "费用" rather
+        than a fixed question. We ask the model to generate ONE concrete query
+        using confirmed slot info (e.g. season/product/service scope).
+
+        Safety:
+        - Output must be a single line query string (no JSON, no markdown).
+        - If planning fails, return empty string and caller falls back to intent.
+        """
+        try:
+            if self.api_mode != "chat_completions":
+                return ""
+            raw_intent = str(intent or "").strip()
+            if not raw_intent:
+                return ""
+
+            state = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
+            user_tail = state.get("user_tail")
+            if not isinstance(user_tail, list):
+                user_tail = []
+            tail_text = "\n".join(str(x) for x in user_tail[-6:] if str(x).strip())
+
+            # Provide compact structured context from summary_data (confirmed slots only).
+            sd = summary_data if isinstance(summary_data, dict) else {}
+            try:
+                sd_json = json.dumps(sd, ensure_ascii=False)
+            except Exception:
+                sd_json = "{}"
+
+            sys = (
+                "You are a query planner for a knowledge base search tool. "
+                "Given an intent from a proposal template and confirmed customer slots, "
+                "produce EXACTLY ONE search query that will retrieve the most relevant KB entry. "
+                "Rules: output ONLY the query text on one line. No markdown, no quotes, no JSON, "
+                "no explanation. If you cannot plan a better query, repeat the intent text."
+            )
+
+            user = (
+                f"Intent from template: {raw_intent}\n\n"
+                f"Confirmed slot summary (JSON): {sd_json}\n\n"
+                f"Recent user messages (tail, newest last):\n{tail_text}\n\n"
+                "Plan a RAG query that includes the relevant qualifiers from slots "
+                "(e.g. product/service name, season like spring/summer, scope, audience), "
+                "so that an intent like '费用' becomes something like '春季穿搭方案 费用/报价' "
+                "or 'XX服务 报价 计费项'."
+            )
+
+            kwargs: Dict[str, Any] = {"model": self.model, "messages": [{"role": "system", "content": sys}, {"role": "user", "content": user}]}
+            try:
+                kwargs.update(self._max_tokens_param(self._presales_runtime.template_rag_query_planner_max_tokens))
+            except Exception:
+                kwargs["max_tokens"] = self._presales_runtime.template_rag_query_planner_max_tokens
+
+            resp = self._interruptible_api_call(kwargs)
+            planned = str(self._presales_response_text(resp) or "").strip()
+            if not planned:
+                return ""
+
+            # Enforce single-line plain text.
+            planned = planned.splitlines()[0].strip()
+            planned = planned.strip("`").strip()
+            # Drop obvious non-query formats.
+            if planned.startswith("{") or planned.startswith("[") or planned.lower().startswith("json"):
+                return ""
+            # Avoid runaway strings.
+            if len(planned) > 300:
+                planned = planned[:300].rstrip()
+            return planned
+        except Exception:
+            return ""
+    #2027-05-05-zty-end
+
+    #2027-05-06-zty-start
+    def _presales_generate_template_ai_block(
+        self,
+        *,
+        intent: str,
+        summary_data: Dict[str, Any],
+        template_markdown: str,
+        task_id: str,
+    ) -> str:
+        """Generate one AI block for a proposal template {{ai}} placeholder.
+
+        `intent` is the line-prefix label (e.g. "版型选择", "色系方向").
+        Output plain text only. If missing info makes generation unreliable,
+        return empty string (do not hallucinate hard facts).
+        """
+        if self.api_mode != "chat_completions":
+            return ""
+        it = str(intent or "").strip()
+        if not it:
+            return ""
+
+        tmpl_title = ""
+        for line in str(template_markdown or "").splitlines():
+            if line.strip().startswith("#"):
+                tmpl_title = line.strip().lstrip("#").strip()
+                break
+
+        try:
+            sd_json = json.dumps(summary_data if isinstance(summary_data, dict) else {}, ensure_ascii=False)
+        except Exception:
+            sd_json = "{}"
+
+        sys = (
+            "你是售前方案模板的字段填充器。"
+            "你只负责填写一个条目字段的内容。"
+            "规则：只输出纯文本内容，不要输出标题或解释；"
+            "不要编造客户未提供的硬事实（例如具体品牌、确定尺码、确定价格）；"
+            "如果缺少信息无法可靠生成，输出空字符串。"
+        )
+        user = (
+            f"模板名称：{tmpl_title}\n"
+            f"条目名称：{it}\n\n"
+            f"已确认的客户信息（JSON）：\n{sd_json}\n\n"
+            "请基于已确认信息填写该条目。只输出填写内容本身。"
+        )
+
+        kwargs: Dict[str, Any] = {"model": self.model, "messages": [{"role": "system", "content": sys}, {"role": "user", "content": user}]}
+        try:
+            kwargs.update(self._max_tokens_param(self._presales_runtime.template_ai_max_tokens))
+        except Exception:
+            kwargs["max_tokens"] = self._presales_runtime.template_ai_max_tokens
+        try:
+            resp = self._interruptible_api_call(kwargs)
+            out = str(self._presales_response_text(resp) or "").strip()
+            if out in {"", '""', "''", "(empty)"}:
+                return ""
+            out = out.strip("`").strip()
+            # Avoid very long blocks in templates.
+            if len(out) > 1200:
+                out = out[:1200].rstrip()
+            return out
+        except Exception:
+            return ""
+    #2027-05-06-zty-end
+
+    def _ragflow_hybrid_available(self) -> bool:
+        """True when hybrid RAGFlow logic is enabled and the tool is available."""
+        return (
+            self._ragflow_hybrid_mode != "off"
+            and "ragflow_completion" in self.valid_tool_names
+        )
+    #2027-04-28-zty-end
+
+    #2027-04-28-zty-start
+    @staticmethod
+    def _turn_has_named_tool_call(
+        messages: List[Dict[str, Any]],
+        turn_user_idx: int,
+        tool_name: str,
+    ) -> bool:
+        """Check whether a tool was called after the current turn's user message."""
+        for msg in messages[turn_user_idx + 1:]:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            tool_calls = msg.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                fn_name = (tc.get("function") or {}).get("name")
+                if fn_name == tool_name:
+                    return True
+        return False
+
+    def _looks_like_ragflow_query(self, user_message: Any) -> bool:
+        """Heuristic routing for enterprise/KB style questions."""
+        text = str(user_message or "").strip()
+        if not text:
+            return False
+        if text.startswith("/"):
+            return False
+        if self._ragflow_hybrid_mode == "always":
+            return True
+
+        lower = text.lower()
+        if "?" in text or "？" in text:
+            return True
+        if re.search(
+            r"\b(what|how|why|when|where|which|who|can|could|should|would|is|are|do|does|did)\b",
+            lower,
+        ):
+            return True
+        zh_question_markers = (
+            "请问", "怎么", "如何", "为什么", "是否", "能否", "可以", "哪里", "多少", "啥", "什么",
+        )
+        if any(marker in text for marker in zh_question_markers):
+            return True
+
+        kb_markers = (
+            "knowledge base", "kb", "faq", "documentation", "manual", "policy",
+            "pricing", "price", "refund", "billing", "invoice", "account",
+            "feature", "integration", "workflow", "onboarding", "support",
+            "知识库", "文档", "手册", "流程", "策略", "政策", "价格", "退款", "账单",
+            "发票", "账号", "功能", "集成", "售后", "客服",
+        )
+        return any(marker in lower for marker in kb_markers)
+
+    @staticmethod
+    def _compact_ragflow_value(value: Any, max_chars: int = 1200) -> str:
+        """Stringify structured RAG payloads with a hard size cap."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            text = value.strip()
+        else:
+            try:
+                text = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                text = str(value)
+        if len(text) > max_chars:
+            return text[: max_chars - 3] + "..."
+        return text
+
+    def _build_ragflow_hybrid_context(
+        self,
+        *,
+        query: str,
+        source: str,
+        tool_result: str,
+    ) -> tuple[str, bool]:
+        """Convert a ragflow_completion tool result into an injectable context block."""
+        try:
+            payload = json.loads(tool_result or "{}")
+        except Exception:
+            payload = {"success": False, "error": "Invalid JSON from ragflow_completion"}
+
+        if not isinstance(payload, dict):
+            payload = {"success": False, "error": "Unexpected tool payload type"}
+
+        if not payload.get("success"):
+            return "", False
+
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        answer = self._compact_ragflow_value(result.get("answer"), max_chars=2600)
+        refs = result.get("reference")
+        refs_preview = self._compact_ragflow_value(refs, max_chars=1200)
+        ref_count = len(refs) if isinstance(refs, list) else 0
+        warning = self._compact_ragflow_value(result.get("warning"), max_chars=300)
+
+        lines = [
+            "<ragflow-context>",
+            f"source: {source}",
+            f"query: {self._compact_ragflow_value(query, max_chars=600)}",
+            "guidance: treat this as enterprise knowledge context for product/policy/process facts.",
+            f"answer: {answer}",
+            f"reference_count: {ref_count}",
+        ]
+        if refs_preview:
+            lines.append(f"references_preview: {refs_preview}")
+        if warning:
+            lines.append(f"warning: {warning}")
+        lines.append("</ragflow-context>")
+        return "\n".join(lines), True
+
+    def _run_ragflow_hybrid_lookup(
+        self,
+        *,
+        query: str,
+        task_id: str,
+        source: str,
+    ) -> tuple[str, bool]:
+        """Run a host-level RAGFlow lookup for hybrid mode."""
+        q = (query or "").strip()
+        if not q:
+            return "", False
+        if (
+            self._presales_runtime.enabled
+            and self._presales_runtime.single_retrieval_mode
+            and self._presales_turn_rag_calls >= self._presales_runtime.rag_max_calls_per_turn
+        ):
+            return "", False
+        try:
+            if self._presales_runtime.enabled and self._presales_runtime.single_retrieval_mode:
+                self._presales_turn_rag_calls += 1
+                self._presales_turn_rag_attempted = True
+            tool_result = handle_function_call(
+                "ragflow_completion",
+                {"question": q},
+                task_id=task_id,
+                session_id=self.session_id or "",
+                enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
+            )
+        except Exception as exc:
+            logger.warning("ragflow hybrid %s lookup failed: %s", source, exc)
+            return "", False
+
+        try:
+            payload = json.loads(tool_result or "{}")
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            self._presales_record_rag_payload(q, payload)
+
+        context_block, ok = self._build_ragflow_hybrid_context(
+            query=q,
+            source=source,
+            tool_result=tool_result,
+        )
+        if ok:
+            logger.info("ragflow hybrid %s lookup succeeded", source)
+        else:
+            logger.info("ragflow hybrid %s lookup returned no usable context", source)
+        return context_block, ok
+    #2027-04-28-zty-end
     
     
     def _extract_reasoning(self, assistant_message) -> Optional[str]:
@@ -4554,7 +6667,18 @@ class AIAgent:
         if system_message is not None:
             prompt_parts.append(system_message)
 
-        if self._memory_store:
+        # Presales memory isolation: do not include built-in memory/user profile
+        # blocks in the system prompt when presales is active. This prevents the
+        # model from treating prior customer data as current session truth.
+        _presales_mem_off = False
+        try:
+            if getattr(self, "_presales_runtime", None) and getattr(self._presales_runtime, "enabled", False):
+                if bool(getattr(self._presales_runtime, "disable_memory_injection", True)):
+                    _presales_mem_off = True
+        except Exception:
+            _presales_mem_off = False
+
+        if self._memory_store and not _presales_mem_off:
             if self._memory_enabled:
                 mem_block = self._memory_store.format_for_system_prompt("memory")
                 if mem_block:
@@ -4565,8 +6689,9 @@ class AIAgent:
                 if user_block:
                     prompt_parts.append(user_block)
 
-        # External memory provider system prompt block (additive to built-in)
-        if self._memory_manager:
+        # External memory provider system prompt block (additive to built-in).
+        # Also disable in presales when memory isolation is on.
+        if self._memory_manager and not _presales_mem_off:
             try:
                 _ext_mem_block = self._memory_manager.build_system_prompt()
                 if _ext_mem_block:
@@ -8258,6 +10383,12 @@ class AIAgent:
         if block_message is not None:
             return json.dumps({"error": block_message}, ensure_ascii=False)
 
+        #2027-04-28-zty-start
+        _presales_short = self._presales_maybe_short_circuit_rag(function_name, function_args)
+        if _presales_short is not None:
+            return _presales_short
+        #2027-04-28-zty-end
+
         if function_name == "todo":
             from tools.todo_tool import todo_tool as _todo_tool
             return _todo_tool(
@@ -8313,13 +10444,25 @@ class AIAgent:
         elif function_name == "delegate_task":
             return self._dispatch_delegate_task(function_args)
         else:
-            return handle_function_call(
+            #2027-04-28-zty-start
+            # NOTE: original code path returned handle_function_call(...) directly.
+            # It now records ragflow payloads for presales policy, then returns.
+            result = handle_function_call(
                 function_name, function_args, effective_task_id,
                 tool_call_id=tool_call_id,
                 session_id=self.session_id or "",
                 enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                 skip_pre_tool_call_hook=True,
             )
+            if function_name == "ragflow_completion":
+                try:
+                    payload = json.loads(result or "{}")
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict):
+                    self._presales_record_rag_payload(function_args.get("question", ""), payload)
+            return result
+            #2027-04-28-zty-end
 
     @staticmethod
     def _wrap_verbose(label: str, text: str, indent: str = "     ") -> str:
@@ -8688,6 +10831,11 @@ class AIAgent:
                 )
             except Exception:
                 pass
+            #2027-04-28-zty-start
+            _presales_short: Optional[str] = self._presales_maybe_short_circuit_rag(
+                function_name, function_args
+            )
+            #2027-04-28-zty-end
 
             if _block_msg is not None:
                 # Tool blocked by plugin policy — skip counter resets.
@@ -8766,6 +10914,11 @@ class AIAgent:
                 # Tool blocked by plugin policy — return error without executing.
                 function_result = json.dumps({"error": _block_msg}, ensure_ascii=False)
                 tool_duration = 0.0
+            #2027-04-28-zty-start
+            elif _presales_short is not None:
+                function_result = _presales_short
+                tool_duration = 0.0
+            #2027-04-28-zty-end
             elif function_name == "todo":
                 from tools.todo_tool import todo_tool as _todo_tool
                 function_result = _todo_tool(
@@ -8917,6 +11070,18 @@ class AIAgent:
                         enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                         skip_pre_tool_call_hook=True,
                     )
+                    #2027-04-28-zty-start
+                    if function_name == "ragflow_completion":
+                        try:
+                            payload = json.loads(function_result or "{}")
+                        except Exception:
+                            payload = {}
+                        if isinstance(payload, dict):
+                            self._presales_record_rag_payload(
+                                function_args.get("question", ""),
+                                payload,
+                            )
+                    #2027-04-28-zty-end
                     _spinner_result = function_result
                 except Exception as tool_error:
                     function_result = f"Error executing tool '{function_name}': {tool_error}"
@@ -8937,6 +11102,18 @@ class AIAgent:
                         enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                         skip_pre_tool_call_hook=True,
                     )
+                    #2027-04-28-zty-start
+                    if function_name == "ragflow_completion":
+                        try:
+                            payload = json.loads(function_result or "{}")
+                        except Exception:
+                            payload = {}
+                        if isinstance(payload, dict):
+                            self._presales_record_rag_payload(
+                                function_args.get("question", ""),
+                                payload,
+                            )
+                    #2027-04-28-zty-end
                 except Exception as tool_error:
                     function_result = f"Error executing tool '{function_name}': {tool_error}"
                     logger.error("handle_function_call raised for %s: %s", function_name, tool_error, exc_info=True)
@@ -9342,6 +11519,11 @@ class AIAgent:
 
         # Preserve the original user message (no nudge injection).
         original_user_message = persist_user_message if persist_user_message is not None else user_message
+        #2027-04-28-zty-start
+        _presales_query = original_user_message if isinstance(original_user_message, str) else ""
+        self._presales_on_turn_start(_presales_query)
+        _presales_cached_context = self._presales_cached_context_for_query(_presales_query)
+        #2027-04-28-zty-end
 
         # Track memory nudge trigger (turn-based, checked here).
         # Skill trigger is checked AFTER the agent loop completes, based on
@@ -9571,6 +11753,28 @@ class AIAgent:
             except Exception:
                 pass
 
+        #2027-04-28-zty-start
+        # Hybrid RAGFlow retrieval:
+        # 1) prefetch once at turn start for likely KB-style questions
+        # 2) if the model answers without any ragflow tool call, run one
+        #    guard lookup and inject it on the next iteration.
+        _ragflow_hybrid_active = self._ragflow_hybrid_available()
+        _ragflow_query = original_user_message if isinstance(original_user_message, str) else ""
+        _ragflow_prefetch_context = ""
+        _ragflow_prefetch_ok = False
+        _ragflow_guard_context_once = ""
+        _ragflow_guard_attempted = False
+        if _presales_cached_context:
+            _ragflow_prefetch_context = _presales_cached_context
+            _ragflow_prefetch_ok = True
+        elif _ragflow_hybrid_active and self._looks_like_ragflow_query(_ragflow_query):
+            _ragflow_prefetch_context, _ragflow_prefetch_ok = self._run_ragflow_hybrid_lookup(
+                query=_ragflow_query,
+                task_id=effective_task_id,
+                source="prefetch",
+            )
+        #2027-04-28-zty-end
+
         while (api_call_count < self.max_iterations and self.iteration_budget.remaining > 0) or self._budget_grace_call:
             # Reset per-turn checkpoint dedup so each iteration can take one snapshot
             self._checkpoint_mgr.new_turn()
@@ -9711,10 +11915,30 @@ class AIAgent:
                 # never mutated, so nothing leaks into session persistence.
                 if idx == current_turn_user_idx and msg.get("role") == "user":
                     _injections = []
-                    if _ext_prefetch_cache:
+                    # Presales memory isolation: do not inject memory context when
+                    # presales is active (avoids cross-customer data bleed).
+                    _presales_mem_off = False
+                    try:
+                        if getattr(self, "_presales_runtime", None) and getattr(self._presales_runtime, "enabled", False):
+                            if bool(getattr(self._presales_runtime, "disable_memory_injection", True)):
+                                _presales_mem_off = True
+                    except Exception:
+                        _presales_mem_off = False
+                    if _ext_prefetch_cache and not _presales_mem_off:
                         _fenced = build_memory_context_block(_ext_prefetch_cache)
                         if _fenced:
                             _injections.append(_fenced)
+                    # Presales per-stage guidance (ephemeral; cache-safe).
+                    _stage_guidance = self._presales_stage_guidance(original_user_message)
+                    if _stage_guidance:
+                        _injections.append(_stage_guidance)
+                    #2027-04-28-zty-start
+                    if _ragflow_prefetch_context:
+                        _injections.append(_ragflow_prefetch_context)
+                    if _ragflow_guard_context_once:
+                        _injections.append(_ragflow_guard_context_once)
+                        _ragflow_guard_context_once = ""
+                    #2027-04-28-zty-end
                     if _plugin_user_context:
                         _injections.append(_plugin_user_context)
                     if _injections:
@@ -12067,6 +14291,51 @@ class AIAgent:
                 else:
                     # No tool calls - this is the final response
                     final_response = assistant_message.content or ""
+
+                    #2027-04-28-zty-start
+                    # RAGFlow hybrid guard: if the model produced a direct
+                    # answer without any ragflow tool call in this turn,
+                    # perform one host-side lookup and retry with injected
+                    # enterprise KB context.
+                    _turn_has_ragflow = self._turn_has_named_tool_call(
+                        messages,
+                        current_turn_user_idx,
+                        "ragflow_completion",
+                    )
+                    _should_rag_guard = (
+                        _ragflow_hybrid_active
+                        and not _turn_has_ragflow
+                        and not _ragflow_prefetch_ok
+                        and not _ragflow_guard_attempted
+                        and not (
+                            self._presales_runtime.enabled
+                            and self._presales_runtime.single_retrieval_mode
+                        )
+                        and self._has_content_after_think_block(final_response)
+                        and (
+                            self._ragflow_hybrid_mode == "always"
+                            or self._looks_like_ragflow_query(_ragflow_query)
+                        )
+                    )
+                    if _should_rag_guard:
+                        _ragflow_guard_attempted = True
+                        _guard_context, _guard_ok = self._run_ragflow_hybrid_lookup(
+                            query=_ragflow_query,
+                            task_id=effective_task_id,
+                            source="guard",
+                        )
+                        if _guard_ok and _guard_context:
+                            _ragflow_guard_context_once = (
+                                "[System: Before finalizing, ground your answer in the enterprise "
+                                "knowledge context below. If context is insufficient, ask one concise "
+                                "clarifying question.]\n\n"
+                                f"{_guard_context}"
+                            )
+                            self._emit_status(
+                                "📚 RAGFlow guard lookup injected before final answer"
+                            )
+                            continue
+                    #2027-04-28-zty-end
                     
                     # Fix: unmute output when entering the no-tool-call branch
                     # so the user can see empty-response warnings and recovery
@@ -12347,8 +14616,14 @@ class AIAgent:
                     
                     # Strip <think> blocks from user-facing response (keep raw in messages for trajectory)
                     final_response = self._strip_think_blocks(final_response).strip()
+                    #2027-04-28-zty-start
+                    final_response = self._presales_apply_answer_gate(final_response)
+                    #2027-04-28-zty-end
                     
                     final_msg = self._build_assistant_message(assistant_message, finish_reason)
+                    #2027-04-28-zty-start
+                    final_msg["content"] = final_response
+                    #2027-04-28-zty-end
 
                     # Pop thinking-only prefill message(s) before appending
                     # the final response.  This avoids consecutive assistant
