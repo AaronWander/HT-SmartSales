@@ -482,30 +482,6 @@ agent:
 
 ---
 
-## 🗺️ Roadmap
-
-### v1.0 (Current) ✅
-- [x] Three-stage workflow
-- [x] Intelligent slot management
-- [x] Template system
-- [x] RAGFlow integration
-- [x] Multi-platform support
-
-### v1.1 (Planned) 🚧
-- [ ] Visual workflow editor
-- [ ] More placeholder types
-- [ ] Customer profiling analysis
-- [ ] A/B testing framework
-
-### v2.0 (Future) 🔮
-- [ ] Multi-language support (English, Japanese)
-- [ ] Voice dialogue support
-- [ ] Video demo generation
-- [ ] Deep CRM integration
-- [ ] Auto-learning optimization
-
----
-
 ## 📝 Open Source Acknowledgments
 
 This project is built upon the following open source projects:
