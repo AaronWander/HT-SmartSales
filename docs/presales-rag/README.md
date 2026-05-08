@@ -1,30 +1,40 @@
-# Presales RAG 文档索引
+# Presales RAG Documentation
 
-这个目录集中存放 Hermes 中“售前服务目录 + RAGFlow + 槽位对齐 + 模板方案输出 + 阶段状态机”相关文档，避免文档散落在 `plans/`、临时目录或对话记录里。
+This directory contains documentation for the presales service system with RAGFlow integration and slot-based alignment.
 
-## 当前文档
+## Current Documentation
 
-1. [设计流程架构与决策记录](./design-decision-record.md)
-   当前 presales 业务层的总体设计、状态机、服务目录结构、代码落点、测试记录。
-2. [运行时配置与文件位置](./runtime-config.md)
-   说明服务目录、`proposal.md`、`slots.yaml` 放在哪里，修改后如何生效。
-3. [模板变量与撰写规范](./TEMPLATE_GUIDE.md)
-   说明 `slot/sys/rag/ai/ext` 五类变量的写法、边界和模板撰写建议。
+1. [Design & Architecture](./design-decision-record.md)
+   - Overall design of the presales business layer
+   - State machine architecture
+   - Service directory structure
+   - Code organization
+   - Test records
 
-## 当前业务文件位置
+2. [Runtime Configuration](./runtime-config.md)
+   - Service directory structure
+   - `proposal.md` and `slots.yaml` file locations
+   - How changes take effect
 
-业务配置不写在文档目录里，实际由服务目录驱动：
+3. [Template Writing Guide](./TEMPLATE_GUIDE.md)
+   - Explanation of `slot/sys/rag/ai/ext` placeholder types
+   - Boundaries and best practices
+   - Template writing recommendations
+
+## Current Business File Locations
+
+Business configurations are not stored in the documentation directory but are driven by the service directory:
 
 ```text
 presales_services/
-  客户专属穿搭服务/
-    proposal.md
-    slots.yaml
+  example-fashion-service/
+    proposal.md    # Proposal template
+    slots.yaml     # Slot configuration
 ```
 
-## 文档保留原则
+## Documentation Principles
 
-1. 架构设计与决策变化，更新 `design-decision-record.md`。
-2. 用户需要知道“文件放哪里、怎么改、怎么重启”，更新 `runtime-config.md`。
-3. 模板变量、占位符和模板写作规则，更新 `TEMPLATE_GUIDE.md`。
-4. 不再新增临时散文档；如果是短期计划，放到 `plans/` 或任务记录里，不放进本目录。
+1. For architecture design and decision changes, update `design-decision-record.md`
+2. For user-facing information about "where files go, how to modify, how to restart", update `runtime-config.md`
+3. For template variables, placeholders, and template writing rules, update `TEMPLATE_GUIDE.md`
+4. Do not add new temporary documents; if it's a short-term plan, put it in `plans/` or task records, not in this directory
