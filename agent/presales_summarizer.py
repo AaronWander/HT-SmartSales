@@ -42,6 +42,16 @@ def _slot_entry_status(entry: Any) -> str:
     return str(entry.get("status") or "none").strip().lower() or "none"
 
 
+def _slot_label(resolved_slots: ResolvedSlots, slot: str) -> str:
+    meta = resolved_slots.meta if isinstance(resolved_slots.meta, dict) else {}
+    item = meta.get(slot)
+    if isinstance(item, dict):
+        label = str(item.get("label") or "").strip()
+        if label:
+            return label
+    return str(slot or "").strip()
+
+
 def build_presales_summary(
     *,
     slots_state: Dict[str, Any],
@@ -59,25 +69,27 @@ def build_presales_summary(
 
     required_lines: List[str] = []
     for slot in resolved_slots.required_base:
+        label = _slot_label(resolved_slots, slot)
         entry = filled.get(slot)
         status = _slot_entry_status(entry)
         value = _slot_entry_value(entry)
         if status == "full" and value:
-            required_lines.append(f"- `{slot}`: {value}")
+            required_lines.append(f"- {label}：{value}")
         elif status == "full":
-            required_lines.append(f"- `{slot}`: (已确认)")
+            required_lines.append(f"- {label}：（已确认）")
         elif status == "partial" and value:
-            required_lines.append(f"- `{slot}`: (部分) {value}")
+            required_lines.append(f"- {label}：（部分）{value}")
         else:
-            required_lines.append(f"- `{slot}`: (缺失)")
+            required_lines.append(f"- {label}：（缺失）")
 
     optional_lines: List[str] = []
     for slot in resolved_slots.optional:
+        label = _slot_label(resolved_slots, slot)
         entry = filled.get(slot)
         status = _slot_entry_status(entry)
         value = _slot_entry_value(entry)
         if status in {"full", "partial"} and value:
-            optional_lines.append(f"- `{slot}`: {value}")
+            optional_lines.append(f"- {label}：{value}")
 
     data = {
         "stage": stage_hint,
@@ -101,17 +113,18 @@ def build_presales_summary(
     parts: List[str] = []
     parts.append("我先把目前已收集到的信息整理如下，请你确认是否准确：")
     parts.append("")
-    parts.append("**必填信息（required_base）**")
+    parts.append("**已确认信息**")
     parts.extend(required_lines or ["- (无)"])
     if optional_lines:
         parts.append("")
-        parts.append("**补充信息（optional）**")
+        parts.append("**补充信息**")
         parts.extend(optional_lines)
 
     parts.append("")
     if missing:
         parts.append("目前还缺少必填信息，先补齐后我再整理：")
-        parts.append(f"- 缺失：{json.dumps(missing, ensure_ascii=False)}")
+        missing_labels = [_slot_label(resolved_slots, slot) for slot in missing]
+        parts.append(f"- 缺失：{json.dumps(missing_labels, ensure_ascii=False)}")
     else:
         parts.append("如果确认无误，请直接回复确认；如果需要修改/补充，请直接说明要调整的内容。")
 

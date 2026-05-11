@@ -7,6 +7,8 @@ from agent.presales_policy import (
     compute_missing_required,
     merge_slot_assessments,
     slot_coverage,
+    build_slot_assessment_messages,
+    heuristic_slot_assessments,
 )
 
 
@@ -121,4 +123,56 @@ def test_merge_slot_assessments_only_full_counts_as_filled():
     assert state_slots["constraints"]["status"] == "partial"
     assert compute_missing_required(resolved_slots=rs, filled_slots=state_slots) == ["constraints"]
     assert slot_coverage(resolved_slots=rs, filled_slots=state_slots) == 0.5
+
+
+def test_slot_assessment_prompt_only_exposes_candidate_slot_definitions():
+    rs = ResolvedSlots(
+        required_base=["wearing_scene", "core_needs"],
+        required_for_handoff=[],
+        optional=[],
+        meta={
+            "wearing_scene": {"label": "穿着场景", "desc": "最常穿着的场景"},
+            "core_needs": {"label": "核心穿搭需求", "desc": "最想达成的穿搭效果"},
+        },
+    )
+
+    messages = build_slot_assessment_messages(
+        user_text="穿着场景是约会",
+        resolved_slots=rs,
+        candidate_slots=["wearing_scene"],
+    )
+
+    prompt = messages[1]["content"]
+    assert "wearing_scene (穿着场景)" in prompt
+    assert "core_needs (核心穿搭需求)" not in prompt
+    assert "场景/用途只能填入场景类字段" in prompt
+
+
+def test_negative_answer_counts_as_full_for_asked_slot():
+    assessments = heuristic_slot_assessments(
+        user_text="这个衣服是外出旅游穿，不涉及职业和通勤",
+        candidate_slots=["work_context"],
+    )
+
+    assert len(assessments) == 1
+    assert assessments[0].slot == "work_context"
+    assert assessments[0].status == "full"
+    assert assessments[0].value == "这个衣服是外出旅游穿，不涉及职业和通勤"
+
+
+def test_slot_assessment_prompt_treats_negative_answers_as_valid():
+    rs = ResolvedSlots(
+        required_base=["work_context"],
+        required_for_handoff=[],
+        optional=[],
+        meta={"work_context": {"label": "职业/通勤强度", "desc": "工作/通勤场景"}},
+    )
+
+    messages = build_slot_assessment_messages(
+        user_text="不涉及职业和通勤",
+        resolved_slots=rs,
+        candidate_slots=["work_context"],
+    )
+
+    assert "明确回答“无/没有/不涉及/不需要/无要求”，这也是有效答案" in messages[1]["content"]
 #2027-04-28-zty-end

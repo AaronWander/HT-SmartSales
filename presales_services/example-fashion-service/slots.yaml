@@ -1,57 +1,53 @@
-id: 客户专属穿搭服务
+id: 3D模型打印服务
 required_base:
   - customer_name
-  - height_cm
-  - weight_kg
-  - bust_cm
-  - waist_cm
-  - hip_cm
-  - style_preferences
-  - core_needs
-  - avoid_elements
-  - budget_range
-  - climate_city
-  - work_context
-  - size_habits
+  - model_file_type
+  - print_dimensions_lwh
+  - material_selection
+  - color_requirements
+  - layer_height_precision
+  - infill_settings
+  - sanding_required
+  - polishing_required
+  - additional_requirements
+  - delivery_time
+  - delivery_method
 required_for_handoff: []
 optional: []
 meta:
   customer_name:
     label: 客户姓名
     desc: 客户称呼或姓名（用于方案抬头）
-  height_cm:
-    label: 身高
-    desc: 身高（厘米 cm）
-  weight_kg:
-    label: 体重
-    desc: 体重（公斤 kg）
-  bust_cm:
-    label: 胸围
-    desc: 胸围（厘米 cm，可选但建议提供）
-  waist_cm:
-    label: 腰围
-    desc: 腰围（厘米 cm，可选但建议提供）
-  hip_cm:
-    label: 臀围
-    desc: 臀围（厘米 cm，可选但建议提供）
-  style_preferences:
-    label: 偏好风格
-    desc: 偏好的穿搭风格（可多选，例如通勤/法式/韩系/复古等）
-  core_needs:
-    label: 核心穿搭需求
-    desc: 最想达成的穿搭效果（例如显瘦显高/通勤/约会出片/舒适等）
-  avoid_elements:
-    label: 禁忌元素
-    desc: 不喜欢或需要避免的元素（颜色/版型/材质/暴露度等）
-  budget_range:
-    label: 预算范围
-    desc: 预算范围（单件/整套均可，给一个区间更好）
-  climate_city:
-    label: 气候/城市
-    desc: 所在城市或气候特征（例如北京春秋温差大/南方潮湿等）
-  work_context:
-    label: 职业/通勤强度
-    desc: 工作/通勤场景（是否正式、出差频率、活动量等）
-  size_habits:
-    label: 穿着习惯
-    desc: 尺码与穿着习惯（偏宽松/修身、常穿尺码、忌讳紧身等）
+  model_file_type:
+    label: 模型文件类型
+    desc: 客户可提供的模型文件格式或文件类型，例如 STL、OBJ、STEP、3MF 等
+  print_dimensions_lwh:
+    label: 打印尺寸
+    desc: 模型打印后的三维尺寸，按长 x 宽 x 高表达，例如 10cm x 8cm x 6cm；也可说明是否需要按比例缩放
+  material_selection:
+    label: 材料选择
+    desc: 具体材料选择或材料偏好，例如 PLA、ABS、PETG、树脂等
+  color_requirements:
+    label: 颜色要求
+    desc: 客户对成品颜色、单色/多色、喷涂或后期上色的要求
+  layer_height_precision:
+    label: 精度层厚
+    desc: 打印精度或层厚要求，例如 0.1mm、0.2mm、普通精度、高精度等
+  infill_settings:
+    label: 填充率
+    desc: 填充率打印内部结构要求
+  sanding_required:
+    label: 是否打磨
+    desc: 是否需要打磨后处理
+  polishing_required:
+    label: 是否抛光
+    desc: 是否需要抛光后处理
+  additional_requirements:
+    label: 额外要求
+    desc: 其他特殊要求，例如耐温、承重、装配、表面效果、用途说明等
+  delivery_time:
+    label: 交付时间
+    desc: 客户期望的交付日期
+  delivery_method:
+    label: 交付方式
+    desc: 客户希望的交付方式，例如自取或者快递

@@ -41,6 +41,7 @@ import urllib.request
 import uuid
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse, parse_qs, urlunparse
+import yaml
 from openai import OpenAI
 import fire
 from datetime import datetime
@@ -158,7 +159,6 @@ from agent.presales_proposal import (
     build_proposal,
     extract_template_placeholders,
     extract_template_placeholder_instances,
-    default_output_path as _presales_default_proposal_output_path,
 )
 from agent.presales_confirm import load_presales_state, save_presales_state
 #2027-05-04-zty-end
@@ -1844,18 +1844,11 @@ class AIAgent:
         self._presales_template_slot_labels: Dict[str, str] = {}
         #2027-05-05-zty-start
         self._presales_proposal_template_md: str = ""
+        self._presales_active_service_name: str = ""
+        self._presales_active_service_dir: str = ""
+        self._presales_config_signature: str = ""
         try:
-            _tmpl_path = ""
-            if isinstance(_presales_cfg, dict):
-                _tmpl_path = str(_presales_cfg.get("proposal_template_path") or "").strip()
-            if _tmpl_path:
-                from pathlib import Path as _Path
-                from hermes_constants import get_hermes_home as _get_home
-                p = _Path(_tmpl_path)
-                if not p.is_absolute():
-                    p = _get_home() / _tmpl_path
-                if p.exists():
-                    self._presales_proposal_template_md = p.read_text(encoding="utf-8")
+            self._compile_presales_service_files()
         except Exception:
             self._presales_proposal_template_md = ""
         # Business-layer template/slot consistency checks (startup/restart only).
@@ -3198,6 +3191,145 @@ class AIAgent:
         return (user_targets_workspace or assistant_targets_workspace) and assistant_mentions_action
 
     #2027-04-28-zty-start
+    def _presales_services_root(self) -> Path:
+        cfg = self._presales_config_raw if isinstance(getattr(self, "_presales_config_raw", None), dict) else {}
+        raw = str(cfg.get("services_dir") or "presales_services").strip() or "presales_services"
+        root = Path(raw)
+        if not root.is_absolute():
+            root = Path(os.getcwd()) / root
+        return root
+
+    def _presales_service_dirs(self) -> List[Path]:
+        root = self._presales_services_root()
+        if not root.exists() or not root.is_dir():
+            return []
+        dirs: List[Path] = []
+        try:
+            for p in sorted(root.iterdir(), key=lambda x: x.name):
+                if not p.is_dir():
+                    continue
+                if (p / "proposal.md").exists() and (p / "slots.yaml").exists():
+                    dirs.append(p)
+        except Exception:
+            return []
+        return dirs
+
+    @staticmethod
+    def _presales_template_title(template_markdown: str) -> str:
+        for line in str(template_markdown or "").splitlines():
+            text = line.strip()
+            if text.startswith("#"):
+                title = text.lstrip("#").strip()
+                if title:
+                    return title
+        return ""
+
+    def _compile_presales_service_files(self) -> None:
+        """Load active presales service from presales_services/<service>/ files.
+
+        Service-directory files are the business source of truth. The legacy
+        config.yaml `proposal_template_path` / `slots.default` values are only a
+        fallback when no service directory is present.
+        """
+        cfg = copy.deepcopy(self._presales_config_raw if isinstance(self._presales_config_raw, dict) else {})
+        service_dirs = self._presales_service_dirs()
+        if service_dirs:
+            service_dir = service_dirs[0]
+            proposal_path = service_dir / "proposal.md"
+            slots_path = service_dir / "slots.yaml"
+            template_md = proposal_path.read_text(encoding="utf-8")
+            slots_data = yaml.safe_load(slots_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(slots_data, dict):
+                slots_data = {}
+            cfg["slots"] = {"default": slots_data}
+            cfg["proposal_template_path"] = str(proposal_path)
+            self._presales_proposal_template_md = template_md
+            self._presales_active_service_dir = str(service_dir)
+            self._presales_active_service_name = (
+                str(slots_data.get("id") or "").strip()
+                or self._presales_service_name_from_template(template_md)
+                or service_dir.name
+            )
+            self._presales_config_raw = cfg
+        else:
+            self._presales_active_service_dir = ""
+            self._presales_active_service_name = ""
+            self._presales_proposal_template_md = ""
+            tmpl_path = str(cfg.get("proposal_template_path") or "").strip()
+            if tmpl_path:
+                p = Path(tmpl_path)
+                if not p.is_absolute():
+                    # Historical fallback: this used to be resolved relative to
+                    # HERMES_HOME. Prefer cwd first so project-local configs work.
+                    cwd_p = Path(os.getcwd()) / p
+                    p = cwd_p if cwd_p.exists() else get_hermes_home() / p
+                if p.exists():
+                    self._presales_proposal_template_md = p.read_text(encoding="utf-8")
+                    self._presales_active_service_dir = str(p.parent)
+                    self._presales_active_service_name = self._presales_service_name_from_template(
+                        self._presales_proposal_template_md
+                    )
+            self._presales_config_raw = cfg
+
+        sig_payload = {
+            "service_dir": self._presales_active_service_dir,
+            "service_name": self._presales_active_service_name,
+            "slots": self._presales_config_raw.get("slots", {}),
+            "template_sha": hashlib.sha256(
+                (self._presales_proposal_template_md or "").encode("utf-8")
+            ).hexdigest(),
+        }
+        self._presales_config_signature = hashlib.sha256(
+            json.dumps(sig_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+    def _presales_service_name_from_template(self, template_markdown: str) -> str:
+        title = self._presales_template_title(template_markdown)
+        if not title:
+            return ""
+        name = re.sub(r"[（(].*?[)）]", "", title).strip()
+        name = re.sub(r"(方案|模板|设计)$", "", name).strip()
+        if name and not name.endswith("服务"):
+            name += "服务"
+        return name or title
+
+    def _presales_service_catalog_context(self) -> str:
+        if not self._presales_runtime.enabled:
+            return ""
+        service_names: List[str] = []
+        for service_dir in self._presales_service_dirs():
+            name = ""
+            try:
+                slots_data = yaml.safe_load((service_dir / "slots.yaml").read_text(encoding="utf-8")) or {}
+                if isinstance(slots_data, dict):
+                    name = str(slots_data.get("id") or "").strip()
+            except Exception:
+                name = ""
+            if not name:
+                try:
+                    name = self._presales_service_name_from_template(
+                        (service_dir / "proposal.md").read_text(encoding="utf-8")
+                    )
+                except Exception:
+                    name = service_dir.name
+            if name:
+                service_names.append(name)
+        if not service_names and self._presales_active_service_name:
+            service_names.append(self._presales_active_service_name)
+        if not service_names:
+            return ""
+        lines = [
+            "<presales-service-catalog>",
+            "你是当前服务目录对应业务的售前客服，不要自称 Hermes Agent。",
+            "当前只介绍和承接以下服务；如果用户只是问候，可以简短问候并主动说明可提供的服务。",
+            "只有当用户明确表示需要某项服务/方案/设计时，才进入信息采集流程。",
+            "服务列表：",
+        ]
+        for i, name in enumerate(dict.fromkeys(service_names), start=1):
+            lines.append(f"{i}. {name}")
+        lines.append("</presales-service-catalog>")
+        return "\n".join(lines)
+
     def _presales_state_meta_key(self) -> str:
         sid = self.session_id or "default"
         return f"presales_state:{sid}"
@@ -3402,6 +3534,20 @@ class AIAgent:
             return self._presales_activation_heuristic(user_message)
         return False
 
+    def _presales_fresh_state(self, *, reason: str = "") -> Dict[str, Any]:
+        state: Dict[str, Any] = {
+            "in_flow": False,
+            "stage": "info_collection",
+            "slots": {},
+            "rag_cache": {},
+            "metrics": {"retrieved": 0, "cache_hit": 0, "clarify": 0},
+            "last_turn": {},
+            "config_signature": str(getattr(self, "_presales_config_signature", "") or ""),
+        }
+        if reason:
+            state["last_turn"]["state_reset_reason"] = reason
+        return state
+
     def _presales_on_turn_start(self, user_message: str) -> None:
         self._presales_turn_rag_calls = 0
         self._presales_turn_rag_attempted = False
@@ -3416,6 +3562,16 @@ class AIAgent:
         state = self._load_presales_state()
         if not isinstance(state, dict):
             state = {}
+        current_sig = str(getattr(self, "_presales_config_signature", "") or "")
+        if current_sig and str(state.get("config_signature") or "") != current_sig:
+            # Business service files are parsed on startup. If the service
+            # template/slots changed, discard cached slot schema and in-flow
+            # progress so old customer data cannot pollute the new flow.
+            keep_tail = state.get("user_tail") if isinstance(state.get("user_tail"), list) else []
+            state = self._presales_fresh_state(reason="presales_config_changed")
+            state["user_tail"] = keep_tail[-6:] if isinstance(keep_tail, list) else []
+        else:
+            state["config_signature"] = current_sig
         # Simplified flowchart: discovery stage removed.
         # We track whether the session has entered the design flow via
         # state["in_flow"] (bool). When in_flow is false, we do not write slots.
@@ -3430,23 +3586,15 @@ class AIAgent:
         # Default stage when entering design flow.
         if not isinstance(state.get("stage"), str) or not str(state.get("stage") or "").strip():
             state["stage"] = "info_collection"
-        if not isinstance(state.get("resolved_slots"), dict):
-            rs = self._resolved_presales_slots()
-            state["resolved_slots"] = {
-                "required_base": rs.required_base,
-                "required_for_handoff": rs.required_for_handoff,
-                "optional": rs.optional,
-            }
-            #2027-05-05-zty-start
-            # Store slot metadata separately so clarify questions and assessment
-            # prompts can use user-provided desc/label without code changes.
-            state["resolved_slots_meta"] = rs.meta if isinstance(rs.meta, dict) else {}
-            #2027-05-05-zty-end
-        #2027-05-05-zty-start
-        if not isinstance(state.get("resolved_slots_meta"), dict):
-            rs = self._resolved_presales_slots()
-            state["resolved_slots_meta"] = rs.meta if isinstance(rs.meta, dict) else {}
-        #2027-05-05-zty-end
+        rs = self._resolved_presales_slots()
+        state["resolved_slots"] = {
+            "required_base": rs.required_base,
+            "required_for_handoff": rs.required_for_handoff,
+            "optional": rs.optional,
+        }
+        # Store slot metadata separately so clarify questions and assessment
+        # prompts can use user-provided desc/label without code changes.
+        state["resolved_slots_meta"] = rs.meta if isinstance(rs.meta, dict) else {}
 
         rs_dict = state.get("resolved_slots", {})
         #2027-05-05-zty-start
@@ -3484,6 +3632,28 @@ class AIAgent:
 
         stage = str(state.get("stage") or "info_collection").strip() or "info_collection"
         in_flow = bool(state.get("in_flow"))
+        if bool(state.get("flow_completed") or state.get("proposal_sent")):
+            # A completed service round is terminal. For the next user message,
+            # reset to a clean out-of-flow state and let the normal service
+            # activation evaluator decide whether the message starts another
+            # round. This keeps "new order / another one" interpretation in the
+            # LLM-driven service-intent layer instead of a brittle restart
+            # keyword list, while also preventing old slots from leaking.
+            old_tail = state.get("user_tail") if isinstance(state.get("user_tail"), list) else []
+            state = self._presales_fresh_state(reason="completed_flow_reset")
+            state["resolved_slots"] = {
+                "required_base": rs.required_base,
+                "required_for_handoff": rs.required_for_handoff,
+                "optional": rs.optional,
+            }
+            state["resolved_slots_meta"] = rs.meta if isinstance(rs.meta, dict) else {}
+            msg = str(user_message or "").strip()
+            tail = old_tail[-5:] if isinstance(old_tail, list) else []
+            if msg:
+                tail.append(msg[:600] + ("..." if len(msg) > 600 else ""))
+            state["user_tail"] = tail[-6:]
+            stage = "info_collection"
+            in_flow = False
         # Not in the design flow yet: only decide whether to enter.
         if not in_flow:
             should_enter = self._presales_should_activate(user_message)
@@ -3814,6 +3984,16 @@ class AIAgent:
                 if new_val and new_val != old_val:
                     pol = slot_overwrite_policy(slot_key, meta=slot_meta)
                     cpol = slot_conflict_policy(slot_key, meta=slot_meta)
+                    old_conf = 0.0
+                    new_conf = 0.0
+                    try:
+                        old_conf = float(old_entry.get("confidence", 0.0) or 0.0) if isinstance(old_entry, dict) else 0.0
+                    except Exception:
+                        old_conf = 0.0
+                    try:
+                        new_conf = float(new_entry.get("confidence", 0.0) or 0.0)
+                    except Exception:
+                        new_conf = 0.0
                     # Avoid false conflicts for semantically equivalent values
                     # (e.g. paraphrases like "不要蕾丝" vs "避免蕾丝").
                     try:
@@ -3823,6 +4003,17 @@ class AIAgent:
                             continue
                     except Exception:
                         pass
+                    # If the old value was weakly inferred and the new value is
+                    # a stronger answer for the same slot, prefer the stronger
+                    # evidence instead of asking the user about an artificial
+                    # conflict. This catches mis-slots like using "约会" (a
+                    # scene) as core_needs, then later receiving the real
+                    # core_needs answer.
+                    if old_conf < 0.75 and new_conf >= 0.75:
+                        new_entry["value"] = new_val
+                        new_entry["reason"] = (str(new_entry.get("reason") or "") + " | replaced_low_confidence_prior").strip()
+                        slots_state[slot_key] = new_entry
+                        continue
                     if cpol == "ask_confirm" and pol in {"if_user_corrects", "never"} and user_intent != "correct":
                         conflicts.append({"slot": slot_key, "old_value": old_val, "new_value": new_val})
                         continue
@@ -3879,6 +4070,10 @@ class AIAgent:
             "asked_slots": [str(x or "").strip() for x in asked_slots_prev if str(x or "").strip()],
             "updated_at": now_ts(),
         }
+        if isinstance(prev_lt, dict):
+            for preserved_key in ("state_reset_reason",):
+                if preserved_key in prev_lt:
+                    state["last_turn"][preserved_key] = prev_lt[preserved_key]
         self._presales_turn_missing_slots = missing
         self._presales_turn_coverage = coverage
 
@@ -4306,6 +4501,15 @@ class AIAgent:
             return final_response
         state = self._presales_active_state if isinstance(self._presales_active_state, dict) else {}
         missing = list(self._presales_turn_missing_slots or [])
+        if not bool(state.get("in_flow", False)):
+            lt = state.get("last_turn")
+            if not isinstance(lt, dict):
+                lt = {}
+                state["last_turn"] = lt
+            lt["answer_gate_skipped"] = "out_of_design_flow"
+            self._presales_active_state = state
+            self._save_presales_state(state)
+            return final_response
 
         #2027-05-05-zty-start
         # Resolve slots + meta for this session so answer gate can generate
@@ -4536,19 +4740,9 @@ class AIAgent:
                     reason="stage_info_summarization",
                 )
 
-        # proposal: generate proposal after summary confirmed.
+        # proposal: generate, save, and complete the flow after summary confirmed.
         if stage == "proposal":
-            summary_data = state.get("summary") if isinstance(state.get("summary"), dict) else {}
-            proposal = self._presales_render_proposal_from_template(
-                summary_data=summary_data,
-                template_markdown=getattr(self, "_presales_proposal_template_md", "") or "",
-                task_id=getattr(self, "_current_task_id", "") or "",
-            )
-            state["proposal"] = proposal.data
-            lt["proposal_generated"] = True
-            state["proposal_sent"] = True
-            state["in_flow"] = False
-            lt["flow_completed"] = True
+            proposal = self._presales_generate_and_save_proposal(state=state, lt=lt)
             decision = AnswerGateDecision(
                 final_response=proposal.markdown,
                 confidence=decision.confidence,
@@ -4602,32 +4796,7 @@ class AIAgent:
             )
         # When we enter proposal, generate and send proposal immediately.
         if lt.get("stage_transition", {}).get("changed") and state.get("stage") == "proposal":
-            summary_data = state.get("summary") if isinstance(state.get("summary"), dict) else {}
-            proposal = self._presales_render_proposal_from_template(
-                summary_data=summary_data,
-                template_markdown=getattr(self, "_presales_proposal_template_md", "") or "",
-                task_id=getattr(self, "_current_task_id", "") or "",
-            )
-            state["proposal"] = proposal.data
-            state["proposal_sent"] = True
-            lt["proposal_generated"] = True
-            state["in_flow"] = False
-            lt["flow_completed"] = True
-            # Persist the generated proposal to disk for audit/debug/review.
-            try:
-                from hermes_constants import get_hermes_home
-                hermes_home = str(get_hermes_home())
-                out_path = _presales_default_proposal_output_path(
-                    session_id=self.session_id or "default",
-                    hermes_home=hermes_home,
-                )
-                if out_path:
-                    p = Path(out_path)
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_text(str(proposal.markdown or "").strip() + "\n", encoding="utf-8")
-                    lt["proposal_written_path"] = out_path
-            except Exception as e:
-                lt["proposal_write_error"] = str(e)[:300]
+            proposal = self._presales_generate_and_save_proposal(state=state, lt=lt)
             decision = AnswerGateDecision(
                 final_response=proposal.markdown,
                 confidence=decision.confidence,
@@ -4644,6 +4813,81 @@ class AIAgent:
         return decision.final_response
 
     #2027-05-05-zty-start
+    def _presales_proposal_filename_part(self, value: Any, *, fallback: str = "unknown") -> str:
+        text = str(value or "").strip()
+        if not text:
+            text = fallback
+        # Keep Chinese/customer-facing names readable, but remove characters
+        # that are unsafe or confusing in filenames across shells/platforms.
+        text = re.sub(r'[\\/:*?"<>|]+', "_", text)
+        text = re.sub(r"[\x00-\x1f]+", "_", text)
+        text = re.sub(r"\s+", "_", text)
+        text = text.strip("._-")
+        return (text or fallback)[:48]
+
+    def _presales_summary_slot_value(self, summary_data: Dict[str, Any], slot_key: str) -> str:
+        if not isinstance(summary_data, dict):
+            return ""
+        for group in ("required_base", "optional"):
+            section = summary_data.get(group)
+            if not isinstance(section, dict):
+                continue
+            entry = section.get(slot_key)
+            if isinstance(entry, dict):
+                value = str(entry.get("value") or "").strip()
+                if value:
+                    return value
+        return ""
+
+    def _presales_unique_proposal_output_path(self, *, summary_data: Dict[str, Any]) -> str:
+        from hermes_constants import get_hermes_home
+
+        output_dir = get_hermes_home() / "presales" / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        customer = (
+            self._presales_summary_slot_value(summary_data, "customer_name")
+            or self._presales_summary_slot_value(summary_data, "name")
+            or self._presales_summary_slot_value(summary_data, "client_name")
+            or "unknown_customer"
+        )
+        customer_part = self._presales_proposal_filename_part(customer, fallback="unknown_customer")
+        session_part = self._presales_proposal_filename_part(self.session_id or "default", fallback="default")
+        timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+        stem = f"proposal_{timestamp}_{customer_part}_{session_part}"
+
+        candidate = output_dir / f"{stem}.generated.md"
+        counter = 2
+        while candidate.exists():
+            candidate = output_dir / f"{stem}_{counter}.generated.md"
+            counter += 1
+        return str(candidate)
+
+    def _presales_generate_and_save_proposal(self, *, state: Dict[str, Any], lt: Dict[str, Any]):
+        summary_data = state.get("summary") if isinstance(state.get("summary"), dict) else {}
+        proposal = self._presales_render_proposal_from_template(
+            summary_data=summary_data,
+            template_markdown=getattr(self, "_presales_proposal_template_md", "") or "",
+            task_id=getattr(self, "_current_task_id", "") or "",
+        )
+        state["proposal"] = proposal.data
+        state["proposal_sent"] = True
+        state["flow_completed"] = True
+        state["in_flow"] = False
+        lt["proposal_generated"] = True
+        lt["flow_completed"] = True
+        try:
+            out_path = self._presales_unique_proposal_output_path(summary_data=summary_data)
+            if out_path:
+                p = Path(out_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(str(proposal.markdown or "").strip() + "\n", encoding="utf-8")
+                lt["proposal_written_path"] = out_path
+                state["proposal_written_path"] = out_path
+        except Exception as e:
+            lt["proposal_write_error"] = str(e)[:300]
+        return proposal
+
     def _presales_render_proposal_from_template(
         self,
         *,
@@ -6666,6 +6910,10 @@ class AIAgent:
         # API-call time only so it stays out of the cached/stored system prompt.
         if system_message is not None:
             prompt_parts.append(system_message)
+
+        service_catalog = self._presales_service_catalog_context()
+        if service_catalog:
+            prompt_parts.append(service_catalog)
 
         # Presales memory isolation: do not include built-in memory/user profile
         # blocks in the system prompt when presales is active. This prevents the

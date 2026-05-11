@@ -199,6 +199,15 @@ def heuristic_slot_assessments(
         if re.search(r"(\d+)", text):
             _add("budget_range", text, text)
 
+    # Explicit negative answers are valid answers for the field that was just
+    # asked. Example: for "职业/通勤强度", "不涉及职业和通勤" means the slot is
+    # complete, not missing.
+    negative_answer = any(k in text for k in ("不涉及", "没有", "无", "不用", "不需要", "没有要求", "无要求"))
+    if negative_answer:
+        for slot in want:
+            if slot not in {"height_cm", "weight_kg", "bust_cm", "waist_cm", "hip_cm", "budget_range"}:
+                _add(slot, text, text)
+
     # Bust/waist/hip cm
     m = re.search(r"(?:胸围)\s*(?:是|为)?\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)?", text, re.IGNORECASE)
     if m:
@@ -708,9 +717,12 @@ def build_slot_assessment_messages(
     resolved_slots: ResolvedSlots,
     candidate_slots: List[str],
 ) -> List[Dict[str, str]]:
+    candidate_set = set(str(s or "").strip() for s in (candidate_slots or []) if str(s or "").strip())
     slot_names = _all_resolved_slot_names(resolved_slots)
     slot_lines = []
     for slot in slot_names:
+        if candidate_set and slot not in candidate_set:
+            continue
         #2027-05-05-zty-start
         meta = resolved_slots.meta.get(slot, {}) if isinstance(resolved_slots.meta, dict) else {}
         label = str(meta.get("label") or "").strip()
@@ -738,9 +750,16 @@ def build_slot_assessment_messages(
         "状态定义：none=没有可用信息；partial=相关但不足以作为完整判断依据；"
         "full=有明确、可引用的客户侧依据。\n"
         "重要规则：关键词命中不能直接算 full；不确定、未定、还在讨论通常是 partial；"
-        "RAG/产品知识不能替代客户需求证据。\n\n"
-        f"槽位列表：\n{chr(10).join(slot_lines)}\n\n"
-        f"本轮需重点评估的候选槽位（只允许在这些slot上给full/partial；其他slot一律输出none）："
+        "RAG/产品知识不能替代客户需求证据。\n"
+        "如果客户对被问字段明确回答“无/没有/不涉及/不需要/无要求”，这也是有效答案，"
+        "应输出 full，value 用客户的否定表述，不要继续判为缺失。\n"
+        "严格区分字段语义：场景/用途只能填入场景类字段，不能填入核心需求；"
+        "风格偏好只能填入风格字段，不能填入预算、禁忌或场景；"
+        "如果一句话只回答了某个字段，不要为了凑满候选字段而给其他字段赋值。\n"
+        "value 必须是该字段自己的答案，不要包含字段名、推理过程或其他字段的信息。\n"
+        "evidence 必须是客户原话中支撑该字段的短句；如果找不到对应短句，status 必须为 none。\n\n"
+        f"本轮允许评估的槽位定义：\n{chr(10).join(slot_lines)}\n\n"
+        f"本轮候选槽位（只允许这些slot给full/partial）："
         f"{json.dumps(candidate_slots, ensure_ascii=False)}\n\n"
         f"客户本轮输入：\n{str(user_text or '').strip()[:4000]}\n\n"
         "输出格式：\n"

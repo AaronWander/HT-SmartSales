@@ -1,10 +1,4 @@
-# 客户专属穿搭方案
-
-说明：
-
-- 这是一个可直接渲染的 Markdown 模板（已移除多余转义和错误代码块）。
-- 占位符建议用 Hermes 方案模板约定：`{{slot:...}}` / `{{sys:...}}` / `{{rag:...}}` / `{{ai:...}}` / `{{ext:...}}`。
-- 当前系统默认会填 `sys` 与 `slot`，`rag` 会按模板驱动检索（每轮最多 1 次），`ai/ext` 目前默认留空。
+# 3D模型打印方案
 
 ---
 
@@ -12,7 +6,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 设计师/工作室 | 侧石工作室 |
+| 工作室 | TSTworkshop |
 | 方案日期 | {{sys:date}} |
 | 客户姓名 | {{slot:customer_name}} |
 
@@ -22,35 +16,23 @@
 
 | 项目 | 具体内容 |
 |---|---|
-| 身高 | {{slot:height_cm}} cm |
-| 体重 | {{slot:weight_kg}} kg |
-| 胸围 | {{slot:bust_cm}} cm |
-| 腰围 | {{slot:waist_cm}} cm |
-| 臀围 | {{slot:hip_cm}} cm |
-| 身材特点简述 | {{ai}} |
-| 偏好风格 | {{slot:style_preferences}} |
-| 核心穿搭需求 | {{slot:core_needs}} |
-| 禁忌元素 | {{slot:avoid_elements}} |
-
+| 模型文件类型 | {{slot:model_file_type}} |
+| 打印尺寸 | {{slot:print_dimensions_lwh}} |
+| 材料选择 | {{slot:material_selection}} |
+| 颜色要求 | {{slot:color_requirements}} |
+| 精度层厚 | {{slot:layer_height_precision}} |
+| 填充率 | {{slot:infill_settings}} |
+| 是否打磨 | {{slot:sanding_required}} |
+| 是否抛光 | {{slot:polishing_required}} |
+| 额外要求 | {{slot:additional_requirements}} |
+| 交付时间 | {{slot:delivery_time}} |
+| 交付方式 | {{slot:delivery_method}} |
+| 费用 | {{rag}} |
 ---
 
-## 2. 使用场景与约束（补充信息）
+## 2. 方案详解
 
-| 项目 | 具体内容 |
-|---|---|
-| 日常场景 | {{ai}} |
-| 预算范围（单件/整套） | {{slot:budget_range}} |
-| 气候/城市 | {{slot:climate_city}} |
-| 职业/通勤强度 | {{slot:work_context}} |
-| 穿着习惯 | {{slot:size_habits}} |
-
----
-
-## 3. 整体穿搭核心思路（预填草案，可按客户信息调整）
-
-1. 版型选择：{{ai}}。  
-2. 色系方向：{{ai}}。  
-3. 面料质感：{{ai}}。  
-4. 设计细节：{{ai}}。  
+1. 打印时间预计：{{rag}}。  
+2. 交付时间预估：{{ai}}。  
 
 ---

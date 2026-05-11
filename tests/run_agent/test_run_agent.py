@@ -2210,6 +2210,17 @@ class TestRunConversation:
                 }
             }
         }
+        # These tests intentionally override the runtime slot schema after
+        # agent initialization. Keep the config signature aligned so
+        # _presales_on_turn_start() does not reset the seeded in-memory state as
+        # if project service files had changed.
+        agent._presales_config_signature = ""
+        try:
+            key = agent._presales_state_meta_key()
+            if key in agent._presales_in_memory_state:
+                agent._presales_in_memory_state[key]["config_signature"] = ""
+        except Exception:
+            pass
 
     def test_stop_finish_reason_returns_response(self, agent):
         self._setup_agent(agent)
@@ -2458,6 +2469,93 @@ class TestRunConversation:
         assert agent._presales_active_state["last_turn"]["stage_transition"]["stage"] == "info_collection"
         assert agent._presales_active_state["metrics"]["clarify"] == 1
 
+    def test_presales_answer_gate_does_not_clarify_outside_design_flow(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = True
+        agent._presales_active_state = {
+            "in_flow": False,
+            "stage": "info_collection",
+            "slots": {},
+            "resolved_slots": {
+                "required_base": ["business_goal", "constraints"],
+                "required_for_handoff": [],
+                "optional": [],
+            },
+            "resolved_slots_meta": {
+                "business_goal": {"label": "业务目标"},
+                "constraints": {"label": "约束条件"},
+            },
+            "last_turn": {},
+            "metrics": {"clarify": 0},
+        }
+        agent._presales_turn_missing_slots = ["business_goal", "constraints"]
+        agent._presales_turn_coverage = 0.0
+
+        response = agent._presales_apply_answer_gate("你好！我是售前客服，可以介绍我们的服务。")
+
+        assert response == "你好！我是售前客服，可以介绍我们的服务。"
+        assert agent._presales_active_state["last_turn"]["answer_gate_skipped"] == "out_of_design_flow"
+
+    def test_presales_low_confidence_prior_is_replaced_without_conflict(self, agent):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_config_raw = {
+            "slots": {
+                "default": {
+                    "required_base": ["core_needs"],
+                    "required_for_handoff": [],
+                    "optional": [],
+                    "meta": {
+                        "core_needs": {
+                            "label": "核心穿搭需求",
+                            "desc": "最想达成的穿搭效果",
+                        }
+                    },
+                }
+            }
+        }
+        agent._presales_config_signature = ""
+        agent._presales_in_memory_state[agent._presales_state_meta_key()] = {
+            "in_flow": True,
+            "stage": "info_collection",
+            "slots": {
+                "core_needs": {
+                    "status": "full",
+                    "value": "约会",
+                    "evidence": "穿着场景是约会",
+                    "confidence": 0.62,
+                    "reason": "weak_prior",
+                    "source": "user",
+                }
+            },
+            "rag_cache": {},
+            "metrics": {"retrieved": 0, "cache_hit": 0, "clarify": 0},
+            "last_turn": {"asked_slots": ["core_needs"]},
+        }
+
+        with patch.object(
+            agent,
+            "_presales_assess_slots",
+            return_value=[
+                SlotAssessment(
+                    slot="core_needs",
+                    status="full",
+                    value="轻松休闲，符合春日气息",
+                    evidence="核心需求是轻松休闲，符合春日气息",
+                    confidence=0.9,
+                    reason="明确回答核心需求",
+                )
+            ],
+        ):
+            agent._presales_on_turn_start("核心需求是轻松休闲，符合春日气息")
+
+        slots = agent._presales_active_state["slots"]
+        assert slots["core_needs"]["value"] == "轻松休闲，符合春日气息"
+        assert "replaced_low_confidence_prior" in slots["core_needs"]["reason"]
+        assert agent._presales_active_state.get("pending_conflict") == {}
+
     def test_presales_state_machine_runs_when_answer_gate_disabled(self, agent):
         self._setup_agent(agent)
         agent._presales_runtime.enabled = True
@@ -2507,8 +2605,9 @@ class TestRunConversation:
             agent,
             "_presales_render_proposal_from_template",
             return_value=SimpleNamespace(markdown="方案内容", data={"ok": True}),
-        ), patch(
-            "run_agent._presales_default_proposal_output_path",
+        ), patch.object(
+            agent,
+            "_presales_unique_proposal_output_path",
             return_value=str(tmp_path / "proposal.md"),
         ):
             response = agent._presales_apply_answer_gate("收到，信息确认无误。")
@@ -2520,6 +2619,234 @@ class TestRunConversation:
         assert agent._presales_active_state["last_turn"]["proposal_written_path"] == str(tmp_path / "proposal.md")
         assert (tmp_path / "proposal.md").exists()
         assert agent._presales_active_state["last_turn"]["stage_transition"]["reason"] == "confirmed_info_summary"
+
+    def test_presales_direct_proposal_stage_saves_and_completes_flow(self, agent, tmp_path):
+        self._setup_agent(agent)
+        agent._presales_runtime.enabled = True
+        agent._presales_runtime.answer_gate_enabled = False
+        agent._presales_runtime.state_machine_enabled = True
+        agent._presales_active_state = {
+            "in_flow": True,
+            "stage": "proposal",
+            "slots": {},
+            "summary": {"stage": "info_summarization"},
+            "resolved_slots": {"required_base": [], "required_for_handoff": [], "optional": []},
+            "resolved_slots_meta": {},
+            "last_turn": {},
+            "metrics": {"clarify": 0},
+        }
+        agent._presales_turn_missing_slots = []
+        agent._presales_turn_coverage = 1.0
+
+        with patch.object(
+            agent,
+            "_presales_render_proposal_from_template",
+            return_value=SimpleNamespace(markdown="方案内容", data={"ok": True}),
+        ), patch.object(
+            agent,
+            "_presales_unique_proposal_output_path",
+            return_value=str(tmp_path / "proposal-direct.md"),
+        ):
+            response = agent._presales_apply_answer_gate("准备生成方案。")
+
+        assert response == "方案内容"
+        assert agent._presales_active_state["in_flow"] is False
+        assert agent._presales_active_state["flow_completed"] is True
+        assert agent._presales_active_state["proposal_sent"] is True
+        assert agent._presales_active_state["proposal_written_path"] == str(tmp_path / "proposal-direct.md")
+        assert (tmp_path / "proposal-direct.md").exists()
+
+    def test_presales_proposal_output_path_is_unique_per_generation(self, agent, tmp_path):
+        self._setup_agent(agent)
+        summary = {
+            "required_base": {
+                "customer_name": {"status": "full", "value": "张三/测试"},
+            },
+            "optional": {},
+        }
+
+        original_session_id = agent.session_id
+        fixed_now = SimpleNamespace(now=lambda: SimpleNamespace(strftime=lambda fmt: "20260509_153012"))
+        with patch("run_agent.get_hermes_home", return_value=tmp_path), patch("run_agent._dt", fixed_now):
+            first = agent._presales_unique_proposal_output_path(summary_data=summary)
+            Path(first).write_text("旧方案\n", encoding="utf-8")
+            second = agent._presales_unique_proposal_output_path(summary_data=summary)
+
+        assert first != second
+        assert Path(first).name == f"proposal_20260509_153012_张三_测试_{original_session_id}.generated.md"
+        assert Path(second).name == f"proposal_20260509_153012_张三_测试_{original_session_id}_2.generated.md"
+        assert Path(first).read_text(encoding="utf-8") == "旧方案\n"
+
+    def test_presales_completed_flow_does_not_reactivate_same_session(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        key = agent._presales_state_meta_key()
+        agent._presales_in_memory_state[key] = {
+            "in_flow": False,
+            "stage": "proposal",
+            "proposal_sent": True,
+            "flow_completed": True,
+            "slots": {"business_goal": {"status": "full", "value": "old"}},
+            "rag_cache": {},
+            "metrics": {"retrieved": 0, "cache_hit": 0, "clarify": 0},
+            "last_turn": {},
+        }
+
+        with patch.object(agent, "_presales_should_activate", return_value=False) as mock_activate:
+            agent._presales_on_turn_start("没问题，方案一更心动")
+
+        assert mock_activate.call_count == 1
+        assert agent._presales_active_state["in_flow"] is False
+        assert agent._presales_active_state["slots"] == {}
+        assert "flow_completed" not in agent._presales_active_state
+        assert "proposal_sent" not in agent._presales_active_state
+        assert agent._presales_active_state["last_turn"]["state_reset_reason"] == "completed_flow_reset"
+
+    def test_presales_explicit_restart_after_completed_flow_starts_fresh(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        key = agent._presales_state_meta_key()
+        agent._presales_in_memory_state[key] = {
+            "in_flow": False,
+            "stage": "proposal",
+            "proposal_sent": True,
+            "flow_completed": True,
+            "slots": {"business_goal": {"status": "full", "value": "old"}},
+            "rag_cache": {"old": {"payload": {}}},
+            "metrics": {"retrieved": 3, "cache_hit": 1, "clarify": 2},
+            "last_turn": {},
+        }
+
+        with patch.object(agent, "_presales_should_activate", return_value=True):
+            agent._presales_on_turn_start("重新做一套穿搭方案")
+
+        state = agent._presales_active_state
+        assert state["in_flow"] is True
+        assert state["stage"] == "info_collection"
+        assert state["slots"] == {}
+        assert state["rag_cache"] == {}
+        assert "flow_completed" not in state
+        assert "proposal_sent" not in state
+        assert state["last_turn"]["state_reset_reason"] == "completed_flow_reset"
+        assert set(agent._presales_turn_missing_slots) >= {"business_goal", "constraints"}
+
+    def test_presales_new_order_after_completed_flow_starts_fresh(self, agent):
+        self._setup_agent(agent)
+        self._set_test_business_slots(agent)
+        agent._presales_runtime.enabled = True
+        key = agent._presales_state_meta_key()
+        agent._presales_in_memory_state[key] = {
+            "in_flow": False,
+            "stage": "proposal",
+            "proposal_sent": True,
+            "flow_completed": True,
+            "slots": {"business_goal": {"status": "full", "value": "old order"}},
+            "rag_cache": {"old": {"payload": {}}},
+            "metrics": {"retrieved": 2, "cache_hit": 1, "clarify": 1},
+            "last_turn": {},
+        }
+
+        with patch.object(agent, "_presales_should_activate", return_value=True):
+            agent._presales_on_turn_start("我想再下一个新订单")
+
+        state = agent._presales_active_state
+        assert state["in_flow"] is True
+        assert state["stage"] == "info_collection"
+        assert state["slots"] == {}
+        assert state["rag_cache"] == {}
+        assert "flow_completed" not in state
+        assert "proposal_sent" not in state
+        assert state["last_turn"]["state_reset_reason"] == "completed_flow_reset"
+
+    def test_presales_service_directory_drives_template_slots_and_catalog(self, agent, tmp_path, monkeypatch):
+        self._setup_agent(agent)
+        services_root = tmp_path / "presales_services"
+        service_dir = services_root / "example-fashion-service"
+        service_dir.mkdir(parents=True)
+        (service_dir / "proposal.md").write_text(
+            "# 客户专属穿搭方案\n\n| 客户姓名 | {{slot:customer_name}} |\n",
+            encoding="utf-8",
+        )
+        (service_dir / "slots.yaml").write_text(
+            "\n".join(
+                [
+                    "id: 客户专属穿搭服务",
+                    "required_base:",
+                    "  - customer_name",
+                    "required_for_handoff: []",
+                    "optional: []",
+                    "meta:",
+                    "  customer_name:",
+                    "    label: 客户姓名",
+                    "    desc: 客户称呼或姓名",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        agent._presales_config_raw = {"services_dir": "presales_services"}
+        agent._presales_runtime.enabled = True
+
+        agent._compile_presales_service_files()
+
+        slots = agent._resolved_presales_slots()
+        assert slots.required_base == ["customer_name"]
+        assert slots.meta["customer_name"]["label"] == "客户姓名"
+        assert "客户专属穿搭方案" in agent._presales_proposal_template_md
+        assert agent._presales_active_service_name == "客户专属穿搭服务"
+        assert "客户专属穿搭服务" in agent._presales_service_catalog_context()
+
+    def test_presales_config_signature_resets_cached_state(self, agent, tmp_path, monkeypatch):
+        self._setup_agent(agent)
+        services_root = tmp_path / "presales_services"
+        service_dir = services_root / "example-fashion-service"
+        service_dir.mkdir(parents=True)
+        (service_dir / "proposal.md").write_text(
+            "# 客户专属穿搭方案\n\n| 客户姓名 | {{slot:customer_name}} |\n",
+            encoding="utf-8",
+        )
+        (service_dir / "slots.yaml").write_text(
+            "\n".join(
+                [
+                    "id: 客户专属穿搭服务",
+                    "required_base:",
+                    "  - customer_name",
+                    "required_for_handoff: []",
+                    "optional: []",
+                    "meta:",
+                    "  customer_name:",
+                    "    label: 客户姓名",
+                    "    desc: 客户称呼或姓名",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        agent._presales_config_raw = {"services_dir": "presales_services"}
+        agent._presales_runtime.enabled = True
+        agent._compile_presales_service_files()
+        key = agent._presales_state_meta_key()
+        agent._presales_in_memory_state[key] = {
+            "config_signature": "old-signature",
+            "in_flow": True,
+            "stage": "info_collection",
+            "slots": {"legacy": {"status": "full", "value": "old"}},
+            "resolved_slots": {"required_base": ["legacy"], "required_for_handoff": [], "optional": []},
+            "resolved_slots_meta": {"legacy": {"label": "旧字段"}},
+            "last_turn": {},
+        }
+
+        with patch.object(agent, "_presales_should_activate", return_value=False):
+            agent._presales_on_turn_start("你好")
+
+        state = agent._presales_active_state
+        assert state["in_flow"] is False
+        assert state["slots"] == {}
+        assert state["resolved_slots"]["required_base"] == ["customer_name"]
+        assert state["resolved_slots_meta"]["customer_name"]["label"] == "客户姓名"
+        assert state["last_turn"]["state_reset_reason"] == "presales_config_changed"
 
     def test_presales_single_retrieval_blocks_second_rag_call_same_turn(self, agent_with_ragflow_tool):
         agent = agent_with_ragflow_tool
